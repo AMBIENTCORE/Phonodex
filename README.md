@@ -7,7 +7,7 @@ A desktop application for managing and organizing music file metadata.
 By having correct Artist and Title and/or Album, it can automatically fetch the Cover Art, Catalog Number and Year.
 While all metadata is retrieved from Discogs, we only apply these as we assume others are filled in already.
 Genre is usually user-customized, for example, so we don't apply it.
-It uses the Discogs API (to get a max. of 60 calls/minute) to fetch this information.
+It uses the Discogs API (max. 60 calls/minute) to fetch this information.
 
 You can get a Discogs API key by doing the following:
 - Log in to [Discogs](https://www.discogs.com/),
@@ -28,6 +28,7 @@ This will explain why, for a programmer, the code will definitely have things th
 
 - 🎵 Batch edit ID3 tags and metadata for multiple audio formats (MP3, FLAC, M4A, OGG, WMA, WAV)
 - 🔍 Automatic metadata fetching from Discogs API (for Album Art, Catalog Number, Year)
+- 🚦 Automatic API request limiter (max 60 requests/minute)
 - 🖼️ Clipboard support for Album Art
 - 📁 Exporting files from the imported folders to the final Music Collection folder
 - 🔄 Drag-and-drop file support
