@@ -53,13 +53,23 @@ This will explain why, for a programmer, the code will definitely have things th
 ## Installation
 
 1. Clone the repository
-2. Install required dependencies:
+2. Optional: Setup a virtual environment so dependencies are not installed globally:
+
+```bash
+python3 -m venv venv
+source venv/bin/activate
+```
+
+3. Install dependencies
+
 ```bash
 pip install -r requirements.txt
 ```
-3. Run the application:
+
+4. Run the application:
+
 ```bash
-python main.py
+python3 main.py
 ```
 
 ## File Exporting
