@@ -53,7 +53,7 @@ This will explain why, for a programmer, the code will definitely have things th
 ## Installation
 
 1. Clone the repository
-2. Setup a virtual environment so dependencies are not installed globally:
+2. Optional: Setup a virtual environment so dependencies are not installed globally:
 
 ```bash
 python3 -m venv venv
