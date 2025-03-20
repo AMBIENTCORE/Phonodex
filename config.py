@@ -1,9 +1,61 @@
+"""
+Configuration management for Phonodex application.
+"""
+
 from pathlib import Path
+import json
+import os
+
+# Default folder structure format
+DEFAULT_FOLDER_FORMAT = "D:\\Music\\Collection\\%genre%\\%year%\\[%catalognumber%] %albumartist% - %album%\\%artist% - %title%"
+folder_format = DEFAULT_FOLDER_FORMAT
+
+# Settings file path
+SETTINGS_FILE = "folder_format_settings.json"
+
+def load_settings():
+    """Load settings from file."""
+    global folder_format
+    try:
+        if os.path.exists(SETTINGS_FILE):
+            with open(SETTINGS_FILE, 'r') as f:
+                settings = json.load(f)
+                folder_format = settings.get('folder_format', DEFAULT_FOLDER_FORMAT)
+    except Exception as e:
+        print(f"Error loading settings: {e}")
+        folder_format = DEFAULT_FOLDER_FORMAT
+
+def save_settings():
+    """Save settings to file."""
+    try:
+        with open(SETTINGS_FILE, 'w') as f:
+            settings = {
+                'folder_format': folder_format
+            }
+            json.dump(settings, f, indent=4)
+    except Exception as e:
+        print(f"Error saving settings: {e}")
+
+# Load settings at startup
+load_settings()
 
 class Config:
+    """Main configuration class."""
+    
     # API Configuration
     DISCOGS_SEARCH_URL = "https://api.discogs.com/database/search"
     API_KEY_FILE = Path("api_key.txt")
+    API = {
+        "RATE_LIMIT": 60,
+        "TIMEOUT": 10,
+        "RATE_LIMIT_WAIT": 60,  # seconds
+        "USAGE_THRESHOLDS": {
+            "WARNING": 0.7,  # 70% - switch to orange
+            "CRITICAL": 0.9  # 90% - switch to red
+        }
+    }
+    MAX_API_CALLS_PER_MINUTE = 60
+    API_RATE_LIMIT_WAIT = 60  # seconds
     
     # Window Configuration
     WINDOW_TITLE = "Phonodex"
@@ -15,10 +67,6 @@ class Config:
     TABLE_HEIGHT = 20
     DEBUG_LOG_HEIGHT = 12
     PROCESSING_LOG_HEIGHT = 6
-    
-    # API Rate Limiting
-    MAX_API_CALLS_PER_MINUTE = 60
-    API_RATE_LIMIT_WAIT = 60  # seconds
     
     # File Types
     SUPPORTED_AUDIO_EXTENSIONS = [".mp3", ".flac", ".m4a", ".mp4", ".wma", ".ogg", ".wav"]
@@ -85,23 +133,6 @@ class Config:
         "LOG_SIZE": 9
     }
 
-    # API Configuration
-    API = {
-        "RATE_LIMIT": 60,
-        "TIMEOUT": 10,
-        "RATE_LIMIT_WAIT": 60,  # seconds to wait for rate limit window reset
-        "USAGE_THRESHOLDS": {
-            "WARNING": 0.7,  # 70% - switch to orange
-            "CRITICAL": 0.9  # 90% - switch to red
-        }
-    }
-
-    # Cache Configuration
-    CACHE = {
-        "ENABLED": True,
-        "LOCATION": "cache/"
-    }
-
     # Style Configuration
     STYLES = {
         "THEME": "clam",
@@ -120,4 +151,11 @@ class Config:
             "RIGHT": 3
         }
     }
+
+    # Folder Structure Settings
+    FOLDER_STRUCTURE = {
+        "DEFAULT_FORMAT": DEFAULT_FOLDER_FORMAT,
+        "SETTINGS_FILE": SETTINGS_FILE
+    }
+
 
