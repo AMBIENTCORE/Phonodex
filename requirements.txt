@@ -2,4 +2,4 @@
 requests>=2.32.3
 mutagen>=1.47.0
 tkinterdnd2>=0.3.0  # For drag and drop functionality
-threading>=3.0.0  # For threading support
+
