@@ -1,13 +1,11 @@
-import tkinter as tk
 from tkinter import filedialog, ttk, StringVar, IntVar, font, BooleanVar, messagebox
-from tkinterdnd2 import DND_FILES, TkinterDnD
-import requests
 import os
-import time
-import sys
 import shutil
-from collections import Counter
 import mutagen
+import requests
+import tkinter as tk
+from tkinterdnd2 import DND_FILES, TkinterDnD
+from collections import Counter
 from mutagen.easyid3 import EasyID3
 from mutagen.mp3 import MP3
 from mutagen.flac import FLAC, Picture
@@ -39,12 +37,8 @@ from services.api_client import (
     update_api_progress, enforce_api_limit, update_rate_limits_from_headers,
     rate_limit_total, rate_limit_used, rate_limit_remaining, first_request_time
 )
-import json
-import win32clipboard
 import hashlib
-import win32con
 from array import array
-import io
 from ui.dialogs import show_folder_format_dialog, show_move_confirmation_dialog
 from utils.table_operations import (
     auto_adjust_column_widths, 
@@ -55,8 +49,7 @@ from utils.table_operations import (
     apply_filter as table_apply_filter,
     remove_selected_items as table_ops_remove_items  # Add this import
 )
-from ui.styles import (configure_styles, style_button, style_entry, style_label,
-                      style_text_widget, style_checkbutton, configure_context_menu,
+from ui.styles import (configure_styles, style_button, style_entry, style_label, style_checkbutton, configure_context_menu,
                       update_progress_bar_style, set_api_entry_style, configure_text_tags,
                       configure_table_columns, configure_table_tags, create_styled_button,
                       create_styled_entry, create_styled_text, create_button_pair)
@@ -1530,7 +1523,7 @@ try:
         "CLEAR FILES", 
         lambda: clear_file_list(),  # Use lambda to delay lookup
         "CLEAR LOGS", 
-        lambda: logger.clear_logs(app, debug_scrollbar, processing_scrollbar)
+        lambda: clear_logs()
     )
 except Exception as e:
     log_message(f"[ERROR] Failed to add clear buttons: {str(e)}")
@@ -1778,7 +1771,6 @@ file_table.bind('<<TreeviewSelect>>',
     lambda e: (file_table_selection_callback(file_table, file_count_var), update_basic_fields(e)))
 # Update these bindings to pass None instead of the event
 file_table.bind('<Control-a>', lambda e: select_all_visible(file_table, file_count_var, filter_var.get()))
-file_table.bind('<Control-A>', lambda e: select_all_visible(file_table, file_count_var, filter_var.get()))
 
 # Configure the root window background
 app.configure(bg=Config.COLORS["BACKGROUND"])

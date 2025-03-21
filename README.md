@@ -47,8 +47,8 @@ This will explain why, for a programmer, the code will definitely have things th
 - tkinter / tkinterdnd2 - UI framework with drag-and-drop support
 - mutagen - Audio metadata handling
 - requests - API communication
-- Pillow - Image processing
-- win32clipboard - Windows clipboard integration
+- threading - For threading support
+
 
 ## Installation
 
