@@ -2,6 +2,7 @@
 
 ![image](https://github.com/user-attachments/assets/bd4028e2-6993-4f55-93c0-47f121bd14dc)
 
+Currently compatible with **Windows only** (due to clipboard operations).
 
 A desktop application for managing and organizing music file metadata.
 By having correct Artist and Title and/or Album, it can automatically fetch the Cover Art, Catalog Number and Year.
