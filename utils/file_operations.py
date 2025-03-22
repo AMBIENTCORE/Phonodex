@@ -131,21 +131,6 @@ def handle_drop(files, file_list_var=None, processed_files=None, updated_files=N
                supported_extensions=None, count_var=None, update_table_func=None):
     """
     Handle dropped files and add them to the file list.
-    
-    Args:
-        files: File paths from drag and drop event
-        file_list_var: Reference to the list where files will be stored
-        processed_files: Set of already processed files
-        updated_files: Set of updated files
-        selected_folders_var: Set to store selected folder paths
-        metadata_cache: Dictionary to cache file metadata
-        table: Treeview widget to clear
-        supported_extensions: List of supported file extensions
-        count_var: StringVar to update with file count
-        update_table_func: Function to update the UI table
-        
-    Returns:
-        List of added files
     """
     # Clear all data structures if provided
     if file_list_var is not None:
@@ -163,33 +148,64 @@ def handle_drop(files, file_list_var=None, processed_files=None, updated_files=N
     if table:
         table.delete(*table.get_children())
     
-    # Handle Windows paths from drag and drop - might come in different formats
-    dropped_paths = []
-    if files:
-        # Method 1: Standard format {path1} {path2} {path3}
-        if files.startswith('{') and '}' in files:
-            log_message(f"[DEBUG] Processing drag with standard format")
-            # Split by } { and clean up each path
-            paths = files.split('} {')
-            for path in paths:
-                # Remove outer braces and clean up the path
-                clean_path = path.strip('{}')
-                if clean_path:
-                    dropped_paths.append(clean_path)
-        # Method 2: Alternative format with multiple paths separated by spaces
-        else:
-            log_message(f"[DEBUG] Processing drag with alternative format")
-            # Try to extract valid paths using a regex pattern for Windows paths
-            # Look for drive letter patterns (C:/, D:/, etc.) or UNC paths (\\server\)
-            potential_paths = re.findall(r'[A-Za-z]:[/\\][^\s]*|\\\\[^\s]*', files)
-            for path in potential_paths:
-                path = path.strip()
-                if path and (os.path.exists(path) or os.path.exists(path.strip('"').strip("'"))):
-                    # Clean up any quotes
-                    clean_path = path.strip('"').strip("'")
-                    dropped_paths.append(clean_path)
+    # Log the raw data for debugging
+    log_message(f"[DEBUG] Raw dropped data: {files}")
     
-    log_message(f"[DEBUG] Found {len(dropped_paths)} paths to process")
+    # New approach: extract ALL possible paths regardless of format
+    dropped_paths = []
+    
+    if files:
+        # Extract paths using different methods and combine results
+        
+        # 1. First look for quoted paths (for folders with spaces)
+        quoted_paths = []
+        if '"' in files:
+            quoted_matches = re.findall(r'"([^"]+)"', files)
+            for path in quoted_matches:
+                if os.path.exists(path):
+                    quoted_paths.append(path)
+                    log_message(f"[DEBUG] Found quoted path: '{path}'")
+        
+        # 2. Look for paths between braces
+        brace_paths = []
+        if '{' in files and '}' in files:
+            brace_matches = re.findall(r'\{([^}]+)\}', files)
+            for path in brace_matches:
+                if os.path.exists(path):
+                    brace_paths.append(path)
+                    log_message(f"[DEBUG] Found brace path: '{path}'")
+        
+        # 3. Look for basic Windows drive paths (for folders without spaces)
+        # This captures paths that start with drive letter and colon, and doesn't have a space until the next quote
+        drive_paths = []
+        basic_path_matches = re.findall(r'([A-Za-z]:[/\\][^ "\r\n{}\[\]]*)', files)
+        for path in basic_path_matches:
+            if os.path.exists(path):
+                drive_paths.append(path)
+                log_message(f"[DEBUG] Found basic drive path: '{path}'")
+        
+        # 4. Look for paths in newline-separated format
+        newline_paths = []
+        if '\n' in files or '\r\n' in files:
+            for line in re.split(r'\r?\n', files):
+                clean_line = line.strip().strip('"')
+                if clean_line and os.path.exists(clean_line):
+                    newline_paths.append(clean_line)
+                    log_message(f"[DEBUG] Found newline path: '{clean_line}'")
+        
+        # Combine all paths but remove duplicates while preserving order
+        all_paths = []
+        seen = set()
+        
+        for path in quoted_paths + brace_paths + drive_paths + newline_paths:
+            norm_path = os.path.normpath(path)
+            if norm_path not in seen:
+                seen.add(norm_path)
+                all_paths.append(path)
+                
+        dropped_paths = all_paths
+    
+    log_message(f"[DEBUG] Found {len(dropped_paths)} valid paths to process")
     
     # Process each dropped path (could be file or folder)
     all_files = []
@@ -199,16 +215,23 @@ def handle_drop(files, file_list_var=None, processed_files=None, updated_files=N
                 # It's a folder - add it to selected folders if tracking
                 if selected_folders_var is not None:
                     selected_folders_var.add(path)
+                log_message(f"[DEBUG] Processing folder: '{path}'")
                 
                 # Find all audio files recursively
+                folder_files = []
                 for root, _, files in os.walk(path):
                     for file in files:
                         if any(file.lower().endswith(ext) for ext in supported_extensions):
                             full_path = os.path.join(root, file)
-                            all_files.append(full_path)
+                            folder_files.append(full_path)
+                            
+                log_message(f"[DEBUG] Found {len(folder_files)} audio files in folder '{path}'")
+                all_files.extend(folder_files)
+                
             elif os.path.isfile(path) and any(path.lower().endswith(ext) for ext in supported_extensions):
                 # It's a supported audio file
                 all_files.append(path)
+                log_message(f"[DEBUG] Added file: '{path}'")
         except Exception as e:
             log_message(f"[ERROR] Failed to process path {path}: {str(e)}")
     
@@ -224,6 +247,7 @@ def handle_drop(files, file_list_var=None, processed_files=None, updated_files=N
     if update_table_func:
         update_table_func()
         
+    log_message(f"[INFO] Added {len(all_files)} audio files to the list")
     return all_files
 
 def get_audio_file(file_path):

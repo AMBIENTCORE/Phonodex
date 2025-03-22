@@ -4,6 +4,8 @@ import shutil
 import mutagen
 import requests
 import tkinter as tk
+import subprocess
+import platform
 from tkinterdnd2 import DND_FILES, TkinterDnD
 from collections import Counter
 from mutagen.easyid3 import EasyID3
@@ -695,6 +697,66 @@ for button_text, command in [
 # Add Delete key binding to the table
 file_table.bind('<Delete>', lambda e: remove_selected_items())
 
+# Create the file table context menu
+file_table_context_menu = tk.Menu(file_table)
+configure_context_menu(file_table_context_menu)
+file_table_context_menu.add_command(label="Play Selected", command=lambda: play_selected_files())
+# Add the Show in Explorer option
+file_table_context_menu.add_command(label="Show in Explorer", command=lambda: show_in_explorer(), state="disabled")
+
+# Function to show file table context menu - update to check explorer menu state
+def show_file_table_context_menu(event):
+    """Display the context menu when right-clicking on the file table."""
+    # Only show if there are items selected
+    if file_table.selection():
+        # Update the state of the Show in Explorer menu item
+        update_explorer_menu_state()
+        file_table_context_menu.tk_popup(event.x_root, event.y_root)
+
+# Bind the context menu to the right mouse button on the file table
+file_table.bind("<Button-3>", show_file_table_context_menu)
+
+# Add the function to play selected files
+def play_selected_files():
+    """Play selected files in the default music player."""
+    selected_items = file_table.selection()
+    if not selected_items:
+        log_message("[ERROR] No files selected for playback", log_type="processing")
+        return
+        
+    files_to_play = []
+    for item in selected_items:
+        values = file_table.item(item)['values']
+        file_path = values[8]  # File path is in position 8 (9th element, 0-indexed)
+        
+        if not file_path:
+            log_message("[ERROR] Missing file path for playback", log_type="processing")
+            continue
+            
+        # Check if the file exists
+        if os.path.exists(file_path):
+            files_to_play.append(file_path)
+        else:
+            log_message(f"[ERROR] File does not exist: {file_path}", log_type="processing")
+    
+    if not files_to_play:
+        log_message("[ERROR] No valid files to play", log_type="processing")
+        return
+        
+    try:
+        # Use the appropriate command based on the operating system
+        if platform.system() == 'Windows':
+            for file in files_to_play:
+                os.startfile(file)
+        elif platform.system() == 'Darwin':  # macOS
+            subprocess.call(['open'] + files_to_play)
+        else:  # Linux and others
+            subprocess.call(['xdg-open'] + files_to_play)
+        
+        log_message(f"[SUCCESS] Playing {len(files_to_play)} files", log_type="processing")
+    except Exception as e:
+        log_message(f"[ERROR] Failed to play files: {str(e)}", log_type="processing")
+
 # ---------------- FUNCTIONS ---------------- #
 
 def update_progress_bar(progress, bar_type="file", verbose=False):  # Changed default to False
@@ -786,34 +848,37 @@ def process_files():
     
     # Create a cache of file metadata to avoid repeated file reads
     file_metadata_cache.clear()  # Clear existing cache before populating
-    for file_path in file_list:
-        audio = get_audio_file(file_path)
-        if audio:
-            file_metadata_cache[file_path] = {
-                "artist": get_tag_value(audio, "artist"),
-                "title": get_tag_value(audio, "title"),
-                "album": get_tag_value(audio, "album"),
-                "albumartist": get_tag_value(audio, "albumartist")
-            }
     
-    # Get the file paths for selected items using the cache
+    # First, collect all file paths from selected items
     selected_files = []
     for item in selected_items:
         values = file_table.item(item)['values']
-        table_metadata = [values[0], values[1], values[2], values[4]]  # Artist, Title, Album, Album Artist
-        
-        # Find matching file using cached metadata
-        for file_path, metadata in file_metadata_cache.items():
-            current_metadata = [
-                metadata.get("artist", ""),
-                metadata.get("title", ""),
-                metadata.get("album", ""),
-                metadata.get("albumartist", "")
-            ]
-            # Convert all values to strings before comparison to handle numeric titles
-            if all(str(a).strip() == str(b).strip() for a, b in zip(current_metadata, table_metadata)):
+        if len(values) >= 9:  # Ensure there's a file path
+            file_path = values[8]  # File path is in position 8
+            if file_path and os.path.exists(file_path):
                 selected_files.append(file_path)
-                break
+                
+                # Build the cache directly from files
+                audio = get_audio_file(file_path)
+                if audio:
+                    file_metadata_cache[file_path] = {
+                        "artist": get_tag_value(audio, "artist"),
+                        "title": get_tag_value(audio, "title"),
+                        "album": get_tag_value(audio, "album"),
+                        "albumartist": get_tag_value(audio, "albumartist")
+                    }
+    
+    # Also cache remaining files that aren't selected
+    for file_path in file_list:
+        if file_path not in selected_files and os.path.exists(file_path):
+            audio = get_audio_file(file_path)
+            if audio:
+                file_metadata_cache[file_path] = {
+                    "artist": get_tag_value(audio, "artist"),
+                    "title": get_tag_value(audio, "title"),
+                    "album": get_tag_value(audio, "album"),
+                    "albumartist": get_tag_value(audio, "albumartist")
+                }
     
     # Thread-safe access to unprocessed files
     with processed_lock:
@@ -852,6 +917,7 @@ def process_files():
             artist = metadata["artist"]
             title = metadata["title"]
             album = metadata["album"]
+            albumartist = metadata.get("albumartist", "")  # Add this line to get album artist
             log_message(f"[INFO] Extracted Metadata: Artist={artist}, Album={album}", log_type="debug")
             
             # Create cache key to check if we have this metadata already
@@ -863,6 +929,12 @@ def process_files():
                 if cache_key in album_catalog_cache:
                     cached_metadata = album_catalog_cache[cache_key]
                     log_message(f"[INFO] Using cached metadata for '{artist} - {album}'", log_type="debug")
+                # Add fallback check using albumartist+album if artist check fails
+                elif albumartist and album:
+                    albumartist_cache_key = f"{albumartist.lower()}|{album.lower()}"
+                    if albumartist_cache_key in album_catalog_cache:
+                        cached_metadata = album_catalog_cache[albumartist_cache_key]
+                        log_message(f"[INFO] Using cached metadata via album artist match for '{albumartist} - {album}'", log_type="debug")
             
             # If we have cached metadata, use it without making an API call
             if cached_metadata:
@@ -922,7 +994,7 @@ def process_files():
         values = file_table.item(item)['values']
         table_metadata = [values[0], values[1], values[2], values[4]]  # Artist, Title, Album, Album Artist
         
-        # Find matching file using cached metadata
+        # Find matching file using cached metadata - with improved numeric matching
         for file_path, metadata in file_metadata_cache.items():
             current_metadata = [
                 metadata.get("artist", ""),
@@ -930,8 +1002,29 @@ def process_files():
                 metadata.get("album", ""),
                 metadata.get("albumartist", "")
             ]
-            # Convert all values to strings before comparison to handle numeric titles
-            if all(str(a).strip() == str(b).strip() for a, b in zip(current_metadata, table_metadata)):
+            
+            # Check if all values match, with special handling for numeric values
+            is_match = True
+            for a, b in zip(current_metadata, table_metadata):
+                a_str = str(a).strip()
+                b_str = str(b).strip()
+                
+                # If strings are equal, they match
+                if a_str == b_str:
+                    continue
+                
+                # Try numeric comparison if both can be converted to numbers
+                try:
+                    if a_str and b_str and float(a_str) == float(b_str):
+                        continue
+                except ValueError:
+                    pass
+                
+                # If we reach here, values don't match
+                is_match = False
+                break
+            
+            if is_match:
                 normalized_path = os.path.normpath(file_path)
                 if normalized_path in updated_files:
                     file_table.tag_configure("updated", background=Config.COLORS["UPDATED_ROW"])
@@ -962,9 +1055,45 @@ def start_editing(event):
     # Get the column number
     column_num = int(editing_column[1]) - 1
     
-    # Get the current value
-    current_value = file_table.item(editing_item)['values'][column_num]
+    # Get values from the table row, including the file path
+    values = file_table.item(editing_item)['values']
+    file_path = values[8]  # File path is in the last column
     
+    # Map column indices to tag names
+    column_to_tag = {
+        0: "artist",       # Artist
+        1: "title",        # Title
+        2: "album",        # Album
+        3: "catalognumber", # Catalog Number
+        4: "albumartist",  # Album Artist
+        5: "date",         # Year
+        6: "tracknumber",  # Track
+        7: "genre",        # Genre
+    }
+    
+    # Get value directly from the audio file if possible
+    current_value = ""
+    if file_path and os.path.exists(file_path) and column_num in column_to_tag:
+        tag_name = column_to_tag[column_num]
+        audio = get_audio_file(file_path)
+        if audio:
+            # Get the value directly from the file to preserve leading zeros
+            current_value = get_tag_value(audio, tag_name, "")
+        else:
+            # Fallback to table value
+            current_value = values[column_num]
+            if current_value is not None:
+                current_value = str(current_value)
+            else:
+                current_value = ""
+    else:
+        # Fallback to table value
+        current_value = values[column_num]
+        if current_value is not None:
+            current_value = str(current_value)
+        else:
+            current_value = ""
+
     # Get the cell's bounding box
     x, y, w, h = file_table.bbox(editing_item, editing_column)
     
@@ -1040,7 +1169,7 @@ def finish_editing(event):
         log_message(f"[ERROR] Failed to update table: {e}")
         return
     
-    # Find matching file using the ORIGINAL metadata
+    # Find matching file using the ORIGINAL metadata - with improved numeric matching
     matching_file = None
     for file_path, metadata in file_metadata_cache.items():
         current_metadata = [
@@ -1049,8 +1178,29 @@ def finish_editing(event):
             metadata.get("album", ""),
             metadata.get("albumartist", "")
         ]
-        # Use string comparison instead of exact comparison
-        if all(str(a).strip() == str(b).strip() for a, b in zip(current_metadata, original_metadata)):
+        
+        # Check if all values match, with special handling for numeric values
+        is_match = True
+        for a, b in zip(current_metadata, original_metadata):
+            a_str = str(a).strip()
+            b_str = str(b).strip()
+            
+            # If strings are equal, they match
+            if a_str == b_str:
+                continue
+            
+            # Try numeric comparison if both can be converted to numbers
+            try:
+                if a_str and b_str and float(a_str) == float(b_str):
+                    continue
+            except ValueError:
+                pass
+            
+            # If we reach here, values don't match
+            is_match = False
+            break
+        
+        if is_match:
             matching_file = file_path
             break
     
@@ -1279,24 +1429,60 @@ def update_basic_fields(event=None):
 
 def process_metadata_fields(selected_items, values_by_field):
     """Process metadata fields for the selected items."""
+    
+    # Get the original values directly from file metadata instead of the table
     for item in selected_items:
         values = file_table.item(item)['values']
-        field_mapping = {
-            "Artist": values[0],
-            "Title": values[1],
-            "Album": values[2],
-            "Catalog Number": values[3],
-            "Album Artist": values[4],
-            "Year": values[5],
-            "Track": values[6],
-            "Genre": values[7]
-        }
+        file_path = values[8]  # File path is the last column
         
-        # Add values to their respective lists
-        for field, value in field_mapping.items():
-            values_by_field[field].append(value if value else "")  # Convert None to empty string
+        if file_path and os.path.exists(file_path):
+            # Get metadata directly from file instead of table values
+            audio = get_audio_file(file_path)
+            if audio:
+                field_mapping = {
+                    "Artist": get_tag_value(audio, "artist", ""),
+                    "Title": get_tag_value(audio, "title", ""),
+                    "Album": get_tag_value(audio, "album", ""),
+                    "Catalog Number": get_tag_value(audio, "catalognumber", ""),
+                    "Album Artist": get_tag_value(audio, "albumartist", ""),
+                    "Year": get_tag_value(audio, "date", ""),
+                    "Track": get_tag_value(audio, "tracknumber", ""),
+                    "Genre": get_tag_value(audio, "genre", "")
+                }
+                
+                # Add values to their respective lists
+                for field, value in field_mapping.items():
+                    values_by_field[field].append(value)
+            else:
+                # Fallback to table values if file can't be read
+                table_mapping = {
+                    "Artist": values[0],
+                    "Title": values[1],
+                    "Album": values[2],
+                    "Catalog Number": values[3],
+                    "Album Artist": values[4],
+                    "Year": values[5],
+                    "Track": values[6],
+                    "Genre": values[7]
+                }
+                for field, value in table_mapping.items():
+                    values_by_field[field].append(str(value) if value is not None else "")
+        else:
+            # Fallback if no file path or file doesn't exist
+            table_mapping = {
+                "Artist": values[0],
+                "Title": values[1],
+                "Album": values[2],
+                "Catalog Number": values[3],
+                "Album Artist": values[4],
+                "Year": values[5],
+                "Track": values[6],
+                "Genre": values[7]
+            }
+            for field, value in table_mapping.items():
+                values_by_field[field].append(str(value) if value is not None else "")
     
-    # Set values in all fields
+    # Set values in all fields (unchanged)
     for field, var in basic_field_vars.items():
         values = values_by_field[field]
         
@@ -1306,7 +1492,7 @@ def process_metadata_fields(selected_items, values_by_field):
             # All values are the same
             var.set(values[0])
         else:
-            # Different values (including some empty, some with content)
+            # Different values
             var.set("<different values>")
 
 def apply_basic_fields():
@@ -1348,7 +1534,7 @@ def apply_basic_fields():
         values = file_table.item(item)['values']
         table_metadata = [values[0], values[1], values[2], values[4]]  # Artist, Title, Album, Album Artist
         
-        # Find matching file using cached metadata
+        # Find matching file using cached metadata - with improved numeric matching
         matching_file = None
         for file_path, metadata in file_metadata_cache.items():
             current_metadata = [
@@ -1357,7 +1543,29 @@ def apply_basic_fields():
                 metadata.get("album", ""),
                 metadata.get("albumartist", "")
             ]
-            if all(str(a).strip() == str(b).strip() for a, b in zip(current_metadata, table_metadata)):
+            
+            # Check if all values match, with special handling for numeric values
+            is_match = True
+            for a, b in zip(current_metadata, table_metadata):
+                a_str = str(a).strip()
+                b_str = str(b).strip()
+                
+                # If strings are equal, they match
+                if a_str == b_str:
+                    continue
+                
+                # Try numeric comparison if both can be converted to numbers
+                try:
+                    if a_str and b_str and float(a_str) == float(b_str):
+                        continue
+                except ValueError:
+                    pass
+                
+                # If we reach here, values don't match
+                is_match = False
+                break
+            
+            if is_match:
                 matching_file = file_path
                 break
         
@@ -1816,5 +2024,74 @@ def clear_logs():
     """Clear both log boxes and properly reset their scrollbars."""
     # Use the new logger's clear_logs method
     logger.clear_logs(app, debug_scrollbar, processing_scrollbar)
+
+# Add the function to open the folder in explorer
+def show_in_explorer():
+    """Open the folder containing the selected files in Windows Explorer."""
+    selected_items = file_table.selection()
+    if not selected_items:
+        log_message("[ERROR] No files selected to show in explorer", log_type="processing")
+        return
+        
+    # Get all directories from selected files
+    directories = set()
+    for item in selected_items:
+        values = file_table.item(item)['values']
+        file_path = values[8]  # File path is in position 8 (9th element, 0-indexed)
+        
+        if not file_path:
+            log_message("[ERROR] Missing file path", log_type="processing")
+            continue
+            
+        # Get the directory of the file
+        directory = os.path.dirname(file_path)
+        if os.path.exists(directory):
+            directories.add(directory)
+    
+    # If all files are in the same directory, open it
+    if len(directories) == 1:
+        directory = next(iter(directories))
+        try:
+            if platform.system() == 'Windows':
+                os.startfile(directory)
+            elif platform.system() == 'Darwin':  # macOS
+                subprocess.call(['open', directory])
+            else:  # Linux and others
+                subprocess.call(['xdg-open', directory])
+            
+            log_message(f"[SUCCESS] Opened folder: {directory}", log_type="processing")
+        except Exception as e:
+            log_message(f"[ERROR] Failed to open folder: {str(e)}", log_type="processing")
+    else:
+        log_message("[ERROR] Selected files are in different folders", log_type="processing")
+
+# Function to check if the "Show in Explorer" option should be enabled
+def update_explorer_menu_state():
+    """Enable or disable the Show in Explorer menu item based on selection."""
+    selected_items = file_table.selection()
+    
+    # Default to disabled
+    file_table_context_menu.entryconfig("Show in Explorer", state="disabled")
+    
+    if not selected_items:
+        return
+        
+    # Get all directories from selected files
+    directories = set()
+    for item in selected_items:
+        values = file_table.item(item)['values']
+        file_path = values[8]  # File path is in position 8
+        
+        if not file_path:
+            continue
+            
+        # Get the directory of the file
+        directory = os.path.dirname(file_path)
+        if os.path.exists(directory):
+            directories.add(directory)
+    
+    # Enable if all files are in the same directory
+    if len(directories) == 1:
+        file_table_context_menu.entryconfig("Show in Explorer", state="normal")
 
 app.mainloop()

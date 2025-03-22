@@ -15,13 +15,12 @@ def set_custom_font(custom_font):
     global _app_custom_font
     _app_custom_font = custom_font
 
-def style_button(button, is_danger=False, is_process_button=False):
+def style_button(button, is_danger=False):
     """Apply standard button styling with optional variants.
     
     Args:
         button: The tk.Button to style
         is_danger: If True, apply danger (red) text color
-        is_process_button: If True, apply process button styling
     """
     button.configure(
         font=_app_custom_font,
@@ -69,19 +68,6 @@ def style_label(label, use_smaller_font=False):
         bd=0
     )
 
-def style_text_widget(text_widget):
-    """Apply standard text widget styling.
-    
-    Args:
-        text_widget: The tk.Text widget to style
-    """
-    text_widget.configure(
-        font=('Consolas', Config.FONTS["TABLE_SIZE"]),
-        bg=Config.COLORS["SECONDARY_BACKGROUND"],
-        fg=Config.COLORS["TEXT"],
-        insertbackground=Config.COLORS["TEXT"]
-    )
-
 def style_checkbutton(checkbutton):
     """Apply standard checkbutton styling.
     
@@ -106,8 +92,8 @@ def configure_context_menu(menu):
     menu.configure(
         bg=Config.COLORS["SECONDARY_BACKGROUND"],
         fg=Config.COLORS["TEXT"],
-        activebackground=Config.COLORS["BACKGROUND"],
-        activeforeground=Config.COLORS["TEXT"],
+        activebackground="#3a3a3a",  # Lighter gray for hover effect
+        activeforeground="#ffffff",  # Bright white text on hover
         tearoff=0
     )
 
@@ -304,20 +290,14 @@ def create_styled_entry(parent, textvariable=None, width=None, justify=None):
     return entry
 
 def create_styled_text(parent, width=None, height=None, state="normal", wrap="word"):
-    """Create and return a styled text widget.
-    
-    Args:
-        parent: The parent widget
-        width: Optional width
-        height: Optional height
-        state: Initial state ("normal" or "disabled")
-        wrap: Text wrapping mode
-    
-    Returns:
-        The styled tk.Text
-    """
+    """Create and return a styled text widget."""
     text = tk.Text(parent, width=width, height=height, state=state, wrap=wrap)
-    style_text_widget(text)
+    text.configure(
+        font=('Consolas', Config.FONTS["TABLE_SIZE"]),
+        bg=Config.COLORS["SECONDARY_BACKGROUND"],
+        fg=Config.COLORS["TEXT"],
+        insertbackground=Config.COLORS["TEXT"]
+    )
     return text
 
 def create_button_pair(container, button1_text, button1_command, button2_text, button2_command):
