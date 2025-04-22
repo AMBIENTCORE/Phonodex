@@ -674,6 +674,20 @@ def update_album_metadata(file_path, metadata, audio_file=None, options=None, ca
                 if metadata.get('api_token'):
                     headers['Authorization'] = f'Discogs token={metadata["api_token"]}'
                 
+                # For MP3 files, always remove existing art first
+                if isinstance(audio_file, MP3):
+                    if audio_file.tags is None:
+                        audio_file.add_tags()
+                        log_message(f"[COVER] Added new ID3 tags to file")
+                    
+                    # Always remove existing cover art first
+                    existing_apic = audio_file.tags.getall("APIC")
+                    if existing_apic:
+                        log_message(f"[COVER] Found {len(existing_apic)} existing APIC frames, removing them")
+                        audio_file.tags.delall("APIC")
+                    else:
+                        log_message("[COVER] No existing APIC frames found")
+                
                 response = requests.get(cover_url, headers=headers, timeout=10)
                 if response.status_code == 200:
                     # Handle FLAC files
@@ -697,16 +711,6 @@ def update_album_metadata(file_path, metadata, audio_file=None, options=None, ca
                     # Handle MP3 files
                     elif isinstance(audio_file, MP3):
                         log_message(f"[COVER] Updating cover art for MP3 file")
-                        # Need to use regular mutagen.File for APIC frame
-                        if audio_file.tags is None:
-                            audio_file.add_tags()
-                            log_message(f"[COVER] Added new ID3 tags to file")
-                        
-                        # Check for existing cover art
-                        existing_apic = audio_file.tags.getall("APIC")
-                        if existing_apic:
-                            log_message(f"[COVER] Found {len(existing_apic)} existing APIC frames, removing them")
-                            audio_file.tags.delall("APIC")
                         
                         # Add new cover art
                         try:
