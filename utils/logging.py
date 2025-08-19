@@ -61,21 +61,6 @@ class Logger:
                 - "debug" messages will appear in the debug widget (technical information)
                 - "processing" messages will appear in the processing widget (success/failure results)
         """
-        # Always show API call information regardless of log_type
-        if message.startswith("[INFO] API Calls:"):
-            # Show in processing widget for visibility
-            target_widget = self.processing_widget or self.debug_widget
-            if target_widget:
-                target_widget.configure(state="normal")
-                target_widget.insert("end", message + "\n", "api_call")
-                target_widget.configure(state="disabled")
-                target_widget.see("end")
-            return
-            
-        # Filter out debug messages and cover art logs
-        if message.startswith("[DEBUG]") or message.startswith("[COVER]"):
-            return  # Skip these messages entirely
-        
         # Handle the case when UI elements aren't defined yet (early startup)
         if log_type == "debug" and self.debug_widget is None:
             print(f"Early log: {message}")
@@ -88,18 +73,26 @@ class Logger:
                 return
             target_widget = self.debug_widget
         else:
-            # Normal operation - send to appropriate box
-            target_widget = self.debug_widget if log_type == "debug" else self.processing_widget
+            # Determine which widget to use based on message type
+            if (message.startswith("[OK]") or message.startswith("[NOK]") or 
+                message.startswith("[INFO] API Calls:")):
+                # Only OK/NOK messages and API counter go to processing widget
+                target_widget = self.processing_widget
+            else:
+                # Everything else goes to debug widget
+                target_widget = self.debug_widget
             
         target_widget.configure(state="normal")
         
         # Special handling for OK/NOK tags in processing messages
-        if log_type == "processing" and message.startswith("[OK]") and target_widget == self.processing_widget:
+        if message.startswith("[OK]") and target_widget == self.processing_widget:
             target_widget.insert("end", "[OK] ", "ok")
             target_widget.insert("end", message[4:] + "\n")
-        elif log_type == "processing" and message.startswith("[NOK]") and target_widget == self.processing_widget:
+        elif message.startswith("[NOK]") and target_widget == self.processing_widget:
             target_widget.insert("end", "[NOK] ", "nok")
             target_widget.insert("end", message[5:] + "\n")
+        elif message.startswith("[INFO] API Calls:"):
+            target_widget.insert("end", message + "\n", "api_call")
         else:
             target_widget.insert("end", message + "\n")
             

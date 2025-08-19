@@ -897,102 +897,126 @@ def process_files():
         log_message("[SKIP] No unprocessed files found among selected items.", log_type="debug")
         update_progress_bar(0, "file")  # Reset progress bar
         return
+    
+    # Group files by album to process them together
+    album_groups = {}
+    for file_path in unprocessed_files:
+        metadata = file_metadata_cache.get(file_path)
+        if not metadata:
+            log_message(f"[ERROR] Could not read metadata from file: {file_path}", log_type="processing")
+            continue
+            
+        artist = metadata.get("artist", "")
+        album = metadata.get("album", "")
+        albumartist = metadata.get("albumartist", "")
         
+        # Create album key - prefer album artist if available
+        if albumartist and album:
+            album_key = f"{albumartist.lower()}|{album.lower()}"
+        else:
+            album_key = f"{artist.lower()}|{album.lower()}"
+            
+        if album_key not in album_groups:
+            album_groups[album_key] = []
+            
+        album_groups[album_key].append(file_path)
+    
+    # Process each album group
     total_files = len(unprocessed_files)
-    for idx, file_path in enumerate(unprocessed_files, 1):
+    processed_so_far = 0
+    
+    for album_key, album_files in album_groups.items():
         if stop_processing:
             log_message("[INFO] Processing stopped by user.", log_type="processing")
             update_progress_bar(0, "file")  # Reset progress bar
             return
             
-        # Update progress bar
-        progress = int((idx / total_files) * 100)
-        update_progress_bar(progress, "file")
-        app.update_idletasks()  # Update UI without blocking
+        # Get metadata for the first file to use as reference
+        first_file = album_files[0]
+        metadata = file_metadata_cache.get(first_file)
         
-        log_message(f"[INFO] Processing file: {file_path}", log_type="debug")
+        artist = metadata.get("artist", "")
+        title = metadata.get("title", "")
+        album = metadata.get("album", "")
+        albumartist = metadata.get("albumartist", "")
         
-        # Use cached metadata instead of reading file again
-        metadata = file_metadata_cache.get(file_path)
-        if not metadata:
-            log_message(f"[ERROR] Could not process file: {file_path}", log_type="processing")
-            continue
+        log_message(f"[INFO] Processing album: {album} by {artist or albumartist}", log_type="debug")
+        
+        # Check if we already have cached metadata for this album
+        cached_metadata = None
+        cache_key = album_key  # Use the same key we created for grouping
+        
+        with cache_lock:
+            if cache_key in album_catalog_cache:
+                cached_metadata = album_catalog_cache[cache_key]
+                log_message(f"[INFO] Using cached metadata for '{artist} - {album}'", log_type="debug")
+        
+        # If we don't have cached metadata, fetch it now
+        if not cached_metadata:
+            log_message(f"[INFO] No cached metadata found for '{artist} - {album}' - Making API call", log_type="debug")
             
-        try:
-            artist = metadata["artist"]
-            title = metadata["title"]
-            album = metadata["album"]
-            albumartist = metadata.get("albumartist", "")  # Add this line to get album artist
-            log_message(f"[INFO] Extracted Metadata: Artist={artist}, Album={album}", log_type="debug")
+            # Only enforce API limits and update progress if we're actually making an API call
+            if not enforce_api_limit():
+                log_message("[WARNING] API rate limit reached. Pausing processing.", log_type="processing")
+                break
+                
+            # Update API progress before call
+            update_api_progress("start", verbose=False)
             
-            # Create cache key to check if we have this metadata already
-            cache_key = f"{artist.lower()}|{album.lower()}"
+            # Make the actual API call to fetch metadata
+            metadata_result = metadata_fetch_metadata(artist, album, title, api_token=DISCOGS_API_TOKEN, search_url=Config.DISCOGS_SEARCH_URL)
             
-            # Check if we already have cached metadata for this album
-            cached_metadata = None
-            with cache_lock:
-                if cache_key in album_catalog_cache:
-                    cached_metadata = album_catalog_cache[cache_key]
-                    log_message(f"[INFO] Using cached metadata for '{artist} - {album}'", log_type="debug")
-                # Add fallback check using albumartist+album if artist check fails
-                elif albumartist and album:
-                    albumartist_cache_key = f"{albumartist.lower()}|{album.lower()}"
-                    if albumartist_cache_key in album_catalog_cache:
-                        cached_metadata = album_catalog_cache[albumartist_cache_key]
-                        log_message(f"[INFO] Using cached metadata via album artist match for '{albumartist} - {album}'", log_type="debug")
-            
-            # If we have cached metadata, use it without making an API call
-            if cached_metadata:
-                metadata = cached_metadata
-                log_message(f"[INFO] Using cached metadata for '{artist} - {album}' - No API call needed", log_type="debug")
-                # We don't touch the API progress bar at all when using cached metadata
+            # Handle the new return format (metadata, headers)
+            if isinstance(metadata_result, tuple):
+                cached_metadata, response_headers = metadata_result
+                # Update rate limits from the headers if available
+                if response_headers:
+                    update_rate_limits_from_headers(response_headers, update_progress=True, verbose=False)
             else:
-                log_message(f"[INFO] No cached metadata found for '{artist} - {album}' - Making API call", log_type="debug")
-                
-                # Only enforce API limits and update progress if we're actually making an API call
-                if not enforce_api_limit():
-                    log_message("[WARNING] API rate limit reached. Pausing processing.", log_type="processing")
-                    break
-                    
-                # Update API progress before call (to show we're about to make a call)
-                # Use verbose=False to reduce debug output
-                update_api_progress("start", verbose=False)
-                
-                # Make the actual API call to fetch metadata
-                metadata_result = metadata_fetch_metadata(artist, album, title, api_token=DISCOGS_API_TOKEN, search_url=Config.DISCOGS_SEARCH_URL)
-                
-                # Handle the new return format (metadata, headers)
-                if isinstance(metadata_result, tuple):
-                    metadata, response_headers = metadata_result
-                    # Update rate limits from the headers if available 
-                    # Pass update_progress=True to let it handle the completion update
-                    if response_headers:
-                        update_rate_limits_from_headers(response_headers, update_progress=True, verbose=False)
-                else:
-                    # Backwards compatibility with older versions
-                    metadata = metadata_result
-                    # In this case, we still need to update the API progress manually
-                    update_api_progress("complete", verbose=False)
-                
-                # No need for a separate update_api_progress call here since it's handled above
+                # Backwards compatibility with older versions
+                cached_metadata = metadata_result
+                # In this case, we still need to update the API progress manually
+                update_api_progress("complete", verbose=False)
             
-            if metadata:
+            # Store in cache for future use including other files in the same album
+            if cached_metadata:
+                with cache_lock:
+                    album_catalog_cache[cache_key] = cached_metadata
+                    log_message(f"[INFO] Cached metadata for '{artist} - {album}'", log_type="debug")
+        
+        # Now process all files in this album group using the cached metadata
+        for file_path in album_files:
+            if stop_processing:
+                log_message("[INFO] Processing stopped by user.", log_type="processing")
+                update_progress_bar(0, "file")  # Reset progress bar
+                return
+                
+            # Update progress bar
+            processed_so_far += 1
+            progress = int((processed_so_far / total_files) * 100)
+            update_progress_bar(progress, "file")
+            app.update_idletasks()  # Update UI without blocking
+            
+            # Use cached metadata to update the file
+            if cached_metadata:
                 # Update all selected metadata in one go
-                if update_file_metadata(file_path, metadata):
+                if update_file_metadata(file_path, cached_metadata):
+                    # Get current file's metadata for logging
+                    current_metadata = file_metadata_cache.get(file_path, {})
+                    current_artist = current_metadata.get("artist", "Unknown Artist")
+                    current_title = current_metadata.get("title", "Unknown Title")
+                    current_album = current_metadata.get("album", "Unknown Album")
+                    
                     # Use log_message function for consistency
-                    log_message(f"[OK] {artist} - {title} [{album}]", log_type="processing")
+                    log_message(f"[OK] {current_artist} - {current_title} [{current_album}]", log_type="processing")
                 else:
                     # Use log_message function for consistency
-                    log_message(f"[NOK] {artist} - {title}", log_type="processing")
+                    log_message(f"[NOK] {os.path.basename(file_path)}", log_type="processing")
             
             # Thread-safe update of processed files
             with processed_lock:
                 processed_files.add(os.path.normpath(file_path))
                 processed_count += 1
-                
-        except Exception as e:
-            log_message(f"[ERROR] Failed to process metadata for {os.path.basename(file_path)}: {e}", log_type="processing")
-            continue
     
     # Update visual state using cached metadata
     for item in file_table.get_children():
@@ -1857,6 +1881,7 @@ def organize_to_collection():
         return
         
     # Show the folder format dialog with callback
+    # Immediately reload the folder_format from config to get the freshest value
     show_folder_format_dialog(app, custom_font, organize_files_with_format)
 
 def organize_files_with_format():
@@ -1864,6 +1889,17 @@ def organize_files_with_format():
     Organize selected files to collection folder using metadata.
     Uses the configured folder format.
     """
+    # Always reload the latest folder format from the settings file
+    import json
+    try:
+        with open('folder_format_settings.json', 'r') as f:
+            settings = json.load(f)
+            current_folder_format = settings.get('folder_format', DEFAULT_FOLDER_FORMAT)
+            log_message(f"[INFO] Loaded folder format from settings: {current_folder_format}", log_type="processing")
+    except Exception as e:
+        log_message(f"[ERROR] Failed to load folder format from settings: {str(e)}", log_type="processing")
+        current_folder_format = folder_format  # Fall back to imported value
+    
     # Get selected items
     selected_items = file_table.selection()
     if not selected_items:
@@ -1932,6 +1968,11 @@ def organize_files_with_format():
             genre = genre.split(";")[0].strip()
             log_message(f"[INFO] Using first genre component: {genre}")
             
+        # Handle genre with semicolon separator - take only the part before first semicolon
+        if ";" in genre:
+            genre = genre.split(";")[0].strip()
+            log_message(f"[INFO] Using first genre component: {genre}")
+            
         # Sanitize values for use in paths
         from utils.file_operations import sanitize_filename as file_ops_sanitize_filename
         safe_genre = file_ops_sanitize_filename(genre)
@@ -1947,7 +1988,7 @@ def organize_files_with_format():
         
         # Build the destination path using the configured format
         # Replace placeholders with actual values
-        destination_path = folder_format
+        destination_path = current_folder_format
         destination_path = destination_path.replace("%genre%", safe_genre)
         destination_path = destination_path.replace("%year%", safe_year)
         destination_path = destination_path.replace("%catalognumber%", safe_catalognumber)
@@ -2053,6 +2094,7 @@ file_table.bind('<Return>', finish_editing)
 file_table.bind('<<TreeviewSelect>>', 
     lambda e: (file_table_selection_callback(file_table, file_count_var), update_basic_fields(e)))
 # Update these bindings to pass None instead of the event
+file_table.bind('<Control-A>', lambda e: select_all_visible(file_table, file_count_var, filter_var.get()))
 file_table.bind('<Control-a>', lambda e: select_all_visible(file_table, file_count_var, filter_var.get()))
 
 # Add Ctrl+S shortcut for saving metadata
