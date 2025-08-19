@@ -120,8 +120,36 @@ custom_font_path = resource_path(Config.STYLES["CUSTOM_FONT"]["FILE"])
 if not os.path.exists(custom_font_path):
     raise FileNotFoundError(f"Required font file '{custom_font_path}' not found! Please ensure it's in the same directory as the script.")
 
-# Create font configuration
-custom_font = font.Font(family=Config.STYLES["CUSTOM_FONT"]["FAMILY"], size=Config.FONTS["DEFAULT_SIZE"])
+# EMBED the font directly into tkinter - this is the standard approach
+try:
+    # Check if font is already available
+    available_fonts = font.families()
+    if Config.STYLES["CUSTOM_FONT"]["FAMILY"] not in available_fonts:
+        # Try to load the font using the correct tkinter method
+        # For external fonts, we need to use a different approach
+        import platform
+        if platform.system() == 'Windows':
+            # On Windows, try to copy font to temp directory and load it
+            import tempfile
+            import shutil
+            
+            # Create a temporary copy of the font
+            temp_font_path = os.path.join(tempfile.gettempdir(), os.path.basename(custom_font_path))
+            shutil.copy2(custom_font_path, temp_font_path)
+            
+            # Try to load from temp location
+            app.tk.call('tk', 'fontCreate', Config.STYLES["CUSTOM_FONT"]["FAMILY"], 
+                        '-file', temp_font_path)
+        else:
+            # On other platforms, try direct loading
+            app.tk.call('tk', 'fontCreate', Config.STYLES["CUSTOM_FONT"]["FAMILY"], 
+                        '-file', custom_font_path)
+    
+    custom_font = font.Font(family=Config.STYLES["CUSTOM_FONT"]["FAMILY"], size=Config.FONTS["DEFAULT_SIZE"])
+    print(f"[SUCCESS] Custom font '{Config.STYLES['CUSTOM_FONT']['FAMILY']}' embedded successfully")
+except Exception as e:
+    # If embedding fails, crash the app - no fallbacks
+    raise RuntimeError(f"Failed to embed custom font '{Config.STYLES['CUSTOM_FONT']['FAMILY']}': {e}. The application cannot run without the required font.")
 
 # Configure all styles
 configure_styles(style, custom_font)
@@ -243,8 +271,7 @@ for field in ["Artist", "Title", "Album", "Album Artist", "Catalog Number", "Yea
     field_frame.pack(fill="x", padx=5, pady=2)
     
     # Get the current custom font details to create a smaller version
-    current_font = font.nametofont(custom_font.name)
-    current_size = current_font.cget("size")
+    current_size = custom_font.cget("size")
     smaller_size = current_size - 1  # Decrease by 1pt
     
     # Use capitalized field name directly

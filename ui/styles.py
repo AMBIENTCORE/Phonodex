@@ -53,10 +53,9 @@ def style_label(label, use_smaller_font=False):
         use_smaller_font: If True, use a font size 1pt smaller than default
     """
     if _app_custom_font:
-        current_font = font.nametofont(_app_custom_font.name)
-        current_size = current_font.cget("size")
+        current_size = _app_custom_font.cget("size")
         font_size = current_size - 1 if use_smaller_font else current_size
-        font_family = current_font.cget("family")
+        font_family = _app_custom_font.cget("family")
     else:
         font_family = Config.STYLES["CUSTOM_FONT"]["FAMILY"]
         font_size = Config.FONTS["DEFAULT_SIZE"] - (1 if use_smaller_font else 0)
