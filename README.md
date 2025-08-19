@@ -1,6 +1,6 @@
 # Phonodex - Music Metadata Manager (with Automatic Metadata Fetching)
 
-![image](https://github.com/user-attachments/assets/bd4028e2-6993-4f55-93c0-47f121bd14dc)
+![image](assets/full.png)
 
 Currently compatible with **Windows only** (due to clipboard operations).
 
@@ -23,7 +23,7 @@ All functionality was achieved in around 10 days, and I've recently been working
 
 **For some context**: I'm ***not*** a developer, I have no coding background except VERY basic Python usage before college, and C in college.
 However, I'm naturally curious and have fun with logic and troubleshooting, so I decided to try this 'small' project using different **AI tools**.
-This will explain why, for a programmer, the code will definitely have things that could be optimized or might not logical at first. Hence, I decided to create this project on GitHub.
+This will explain why, for a programmer, the code will definitely have things that could be optimized or might not look logical at first. Hence, I decided to create this project on GitHub.
 
 ## Features
 
@@ -48,7 +48,6 @@ This will explain why, for a programmer, the code will definitely have things th
 - tkinter / tkinterdnd2 - UI framework with drag-and-drop support
 - mutagen - Audio metadata handling
 - requests - API communication
-- threading - For threading support
 
 
 ## Installation
@@ -81,8 +80,7 @@ The application stores the destination folder for exporting in `folder_format_se
 D:\Music\Collection\%genre%\%year%\[%catalognumber%] %albumartist% - %album%\%artist% - %title%
 ```
 
-![image](https://github.com/user-attachments/assets/473d6d1f-727a-472f-a856-8b3c0d3354af)
-
+![image](assets/folder_structure.png)
 
 You can customize this format using the following placeholders:
 - %genre%
@@ -93,15 +91,12 @@ You can customize this format using the following placeholders:
 - %artist%
 - %title%
 
-![image](https://github.com/user-attachments/assets/e37d9608-a64a-4100-be07-858aaa386178)
-
-
 ## Usage
 
 1. Launch the application
 2. Add your Discogs API token in the top input field, and click SAVE
 
-![image](https://github.com/user-attachments/assets/4a4abded-5fda-418e-a24e-ed659180ed86)
+![image](assets/APIKey.png)
 
 3. Load files either by:
    - Clicking the "FILES" button to select individual files

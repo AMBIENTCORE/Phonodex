@@ -3,4 +3,3 @@ requests>=2.25.0
 mutagen>=1.45.0
 Pillow>=8.0.0  # For image handling
 tkinterdnd2>=0.3.0  # For drag and drop functionality
-threading>=3.0.0  # For threading support
