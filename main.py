@@ -724,20 +724,25 @@ def play_selected_files():
         log_message("[ERROR] No files selected for playback", log_type="processing")
         return
         
+    # Get all table items in their display order
+    all_table_items = file_table.get_children()
+    
+    # Filter to only selected items, but maintain table order
     files_to_play = []
-    for item in selected_items:
-        values = file_table.item(item)['values']
-        file_path = values[8]  # File path is in position 8 (9th element, 0-indexed)
-        
-        if not file_path:
-            log_message("[ERROR] Missing file path for playback", log_type="processing")
-            continue
+    for item in all_table_items:
+        if item in selected_items:  # Only process selected items
+            values = file_table.item(item)['values']
+            file_path = values[8]  # File path is in position 8 (9th element, 0-indexed)
             
-        # Check if the file exists
-        if os.path.exists(file_path):
-            files_to_play.append(file_path)
-        else:
-            log_message(f"[ERROR] File does not exist: {file_path}", log_type="processing")
+            if not file_path:
+                log_message("[ERROR] Missing file path for playback", log_type="processing")
+                continue
+                
+            # Check if the file exists
+            if os.path.exists(file_path):
+                files_to_play.append(file_path)
+            else:
+                log_message(f"[ERROR] File does not exist: {file_path}", log_type="processing")
     
     if not files_to_play:
         log_message("[ERROR] No valid files to play", log_type="processing")
@@ -753,7 +758,7 @@ def play_selected_files():
         else:  # Linux and others
             subprocess.call(['xdg-open'] + files_to_play)
         
-        log_message(f"[SUCCESS] Playing {len(files_to_play)} files", log_type="processing")
+        log_message(f"[SUCCESS] Playing {len(files_to_play)} files in table order", log_type="processing")
     except Exception as e:
         log_message(f"[ERROR] Failed to play files: {str(e)}", log_type="processing")
 
@@ -1259,23 +1264,62 @@ def refresh_file_list():
     """Refresh the file list by re-scanning selected folders and keeping individual files."""
     global file_list, processed_files, updated_files, file_metadata_cache
     
+    log_message(f"[DEBUG] Starting refresh. Current selected folders: {list(selected_folders)}")
+    log_message(f"[DEBUG] Current file list has {len(file_list)} files")
+    
+    # Save current table order before refreshing
+    current_table_order = []
+    for item in file_table.get_children():
+        values = file_table.item(item)['values']
+        if len(values) >= 9:  # Ensure we have the file path
+            file_path = values[8]  # File path is in position 8
+            if file_path:
+                current_table_order.append(file_path)
+    
+    log_message(f"[DEBUG] Saved table order with {len(current_table_order)} files")
+    
     # Keep track of individual files (not from folders)
     individual_files = [f for f in file_list if os.path.dirname(f) not in selected_folders]
     
     # Make sure individual files still exist
     individual_files = [f for f in individual_files if os.path.exists(f)]
     
-    # Re-scan all selected folders
+    log_message(f"[DEBUG] Found {len(individual_files)} individual files to preserve")
+    
+    # Re-scan all selected folders - but only scan the exact folder, not the entire tree
     folder_files = []
     for folder in selected_folders:
         if os.path.exists(folder):  # Check if folder still exists
-            new_files = [os.path.join(root, f) 
-                        for root, _, files in os.walk(folder) 
-                        for f in files if f.lower().endswith(tuple(Config.SUPPORTED_AUDIO_EXTENSIONS))]
-            folder_files.extend(new_files)
+            log_message(f"[DEBUG] Scanning folder: {folder}")
+            # Only scan the selected folder itself, not recursively through subfolders
+            # This prevents loading the entire collection when refreshing a subfolder
+            try:
+                files_in_folder = os.listdir(folder)
+                new_files = []
+                for file in files_in_folder:
+                    file_path = os.path.join(folder, file)
+                    if os.path.isfile(file_path) and file.lower().endswith(tuple(Config.SUPPORTED_AUDIO_EXTENSIONS)):
+                        new_files.append(file_path)
+                    elif os.path.isdir(file_path):
+                        # If it's a subdirectory, only scan it if it was explicitly selected
+                        # This maintains the current behavior for explicitly selected subfolders
+                        if file_path in selected_folders:
+                            log_message(f"[DEBUG] Found explicitly selected subfolder: {file_path}")
+                            subfolder_files = [os.path.join(root, f) 
+                                            for root, _, files in os.walk(file_path) 
+                                            for f in files if f.lower().endswith(tuple(Config.SUPPORTED_AUDIO_EXTENSIONS))]
+                            new_files.extend(subfolder_files)
+                            log_message(f"[DEBUG] Added {len(subfolder_files)} files from subfolder")
+                folder_files.extend(new_files)
+                log_message(f"[DEBUG] Added {len(new_files)} files from folder {folder}")
+            except PermissionError:
+                log_message(f"[WARNING] Permission denied accessing folder: {folder}")
+                continue
         else:
             log_message(f"[WARNING] Folder no longer exists: {folder}")
             selected_folders.remove(folder)
+    
+    log_message(f"[DEBUG] Total folder files found: {len(folder_files)}")
     
     # Create new file list while preserving order and removing duplicates
     seen = set()
@@ -1293,6 +1337,8 @@ def refresh_file_list():
             seen.add(f)
             new_file_list.append(f)
     
+    log_message(f"[DEBUG] New file list created with {len(new_file_list)} files (removed {len(folder_files) + len(individual_files) - len(new_file_list)} duplicates)")
+    
     # Update the file list
     file_list = new_file_list
     
@@ -1304,6 +1350,32 @@ def refresh_file_list():
     # Clear and update the table
     file_table.delete(*file_table.get_children())
     update_table()
+    
+    # Restore the table order if we had a previous order
+    if current_table_order:
+        # Create a mapping of file paths to their desired positions
+        order_map = {path: idx for idx, path in enumerate(current_table_order)}
+        
+        # Get all current table items
+        current_items = file_table.get_children()
+        
+        # Sort the items based on the saved order
+        def get_sort_key(item):
+            values = file_table.item(item)['values']
+            if len(values) >= 9:
+                file_path = values[8]
+                return order_map.get(file_path, len(current_table_order))  # Put unknown items at the end
+            return len(current_table_order)
+        
+        # Sort items by their position in the saved order
+        sorted_items = sorted(current_items, key=get_sort_key)
+        
+        # Reorder the items in the table
+        for idx, item in enumerate(sorted_items):
+            file_table.move(item, '', idx)
+        
+        log_message(f"[DEBUG] Restored table order for {len(sorted_items)} items")
+    
     log_message(f"[INFO] Refreshed file list. Total files: {len(file_list)}")
 
 
@@ -1852,9 +1924,12 @@ def organize_files_with_format():
             skipped_files.append(f"{os.path.basename(matching_file)} (missing: {', '.join(missing_fields)})")
             continue
         
-        # Handle genre with backslash separator - take only the part before first backslash
+        # Handle genre with backslash or semicolon separator - take only the part before first separator
         if "\\" in genre:
             genre = genre.split("\\")[0].strip()
+            log_message(f"[INFO] Using first genre component: {genre}")
+        elif ";" in genre:
+            genre = genre.split(";")[0].strip()
             log_message(f"[INFO] Using first genre component: {genre}")
             
         # Sanitize values for use in paths
@@ -1979,6 +2054,9 @@ file_table.bind('<<TreeviewSelect>>',
     lambda e: (file_table_selection_callback(file_table, file_count_var), update_basic_fields(e)))
 # Update these bindings to pass None instead of the event
 file_table.bind('<Control-a>', lambda e: select_all_visible(file_table, file_count_var, filter_var.get()))
+
+# Add Ctrl+S shortcut for saving metadata
+app.bind('<Control-s>', lambda e: apply_basic_fields())
 
 # Configure the root window background
 app.configure(bg=Config.COLORS["BACKGROUND"])

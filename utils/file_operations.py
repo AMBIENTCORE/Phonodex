@@ -305,10 +305,14 @@ def sanitize_filename(filename):
     Returns:
         Sanitized filename safe for use in file systems
     """
-    # Replace characters that are invalid in filenames
-    invalid_chars = ['<', '>', ':', '"', '/', '\\', '|', '?', '*']
-    for char in invalid_chars:
+    # Replace only the characters that are forbidden in Windows file names
+    forbidden_chars = ['<', '>', ':', '"', '/', '\\', '|', '?', '*']
+    for char in forbidden_chars:
         filename = filename.replace(char, '_')
+    
+    # Remove leading/trailing spaces and dots
+    filename = filename.strip(' .')
+    
     return filename
 
 def move_file_to_destination(source_path, dest_path, create_dirs=True):
