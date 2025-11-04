@@ -21,6 +21,7 @@ from services.api_client import make_api_request
 # Cache for metadata results
 album_catalog_cache = {}
 failed_search_cache = set()  # Cache for artist-album combinations that returned no results
+album_cover_image_cache = {}  # Cache for downloaded cover images (stores actual image bytes)
 cache_lock = threading.Lock()  # Lock for thread-safe cache access
 
 def get_tag_value(audio, tag_name, default=""):
@@ -665,31 +666,61 @@ def update_album_metadata(file_path, metadata, audio_file=None, options=None, ca
             try:
                 cover_url = metadata.get("cover_image") or metadata.get("thumb")
                 
-                # Add API token if provided
-                headers = {
-                    'User-Agent': 'Phonodex/1.0',
-                    'Referer': 'https://www.discogs.com/'
-                }
+                # Check if we already have cached image data for this URL
+                image_data = None
+                mime_type = 'image/jpeg'
                 
-                if metadata.get('api_token'):
-                    headers['Authorization'] = f'Discogs token={metadata["api_token"]}'
+                with cache_lock:
+                    if cover_url in album_cover_image_cache:
+                        cached_image = album_cover_image_cache[cover_url]
+                        image_data = cached_image['data']
+                        mime_type = cached_image['mime']
+                        log_message(f"[COVER] Using cached image data: {len(image_data)} bytes (lossless transfer)")
                 
-                # For MP3 files, always remove existing art first
-                if isinstance(audio_file, MP3):
-                    if audio_file.tags is None:
-                        audio_file.add_tags()
-                        log_message(f"[COVER] Added new ID3 tags to file")
+                # If not cached, download it
+                if image_data is None:
+                    # Add API token if provided
+                    headers = {
+                        'User-Agent': 'Phonodex/1.0',
+                        'Referer': 'https://www.discogs.com/'
+                    }
                     
-                    # Always remove existing cover art first
-                    existing_apic = audio_file.tags.getall("APIC")
-                    if existing_apic:
-                        log_message(f"[COVER] Found {len(existing_apic)} existing APIC frames, removing them")
-                        audio_file.tags.delall("APIC")
+                    if metadata.get('api_token'):
+                        headers['Authorization'] = f'Discogs token={metadata["api_token"]}'
+                    
+                    log_message(f"[COVER] Downloading cover art from: {cover_url}")
+                    response = requests.get(cover_url, headers=headers, timeout=10)
+                    
+                    if response.status_code == 200:
+                        image_data = response.content
+                        mime_type = response.headers.get('content-type', 'image/jpeg')
+                        
+                        # Cache the downloaded image for future use
+                        with cache_lock:
+                            album_cover_image_cache[cover_url] = {
+                                'data': image_data,
+                                'mime': mime_type
+                            }
+                        log_message(f"[COVER] Downloaded and cached: {len(image_data)} bytes, mime: {mime_type}")
                     else:
-                        log_message("[COVER] No existing APIC frames found")
+                        log_message(f"[ERROR] Failed to download cover image (Status {response.status_code})")
+                        image_data = None
                 
-                response = requests.get(cover_url, headers=headers, timeout=10)
-                if response.status_code == 200:
+                # If we have image data (either cached or freshly downloaded), apply it
+                if image_data is not None:
+                    # For MP3 files, always remove existing art first
+                    if isinstance(audio_file, MP3):
+                        if audio_file.tags is None:
+                            audio_file.add_tags()
+                            log_message(f"[COVER] Added new ID3 tags to file")
+                        
+                        # Always remove existing cover art first
+                        existing_apic = audio_file.tags.getall("APIC")
+                        if existing_apic:
+                            log_message(f"[COVER] Found {len(existing_apic)} existing APIC frames, removing them")
+                            audio_file.tags.delall("APIC")
+                        else:
+                            log_message("[COVER] No existing APIC frames found")
                     # Handle FLAC files
                     if isinstance(audio_file, FLAC):
                         # Clear existing pictures
@@ -698,9 +729,9 @@ def update_album_metadata(file_path, metadata, audio_file=None, options=None, ca
                         # Create new picture
                         picture = Picture()
                         picture.type = 3  # Front cover
-                        picture.mime = response.headers.get('content-type', 'image/jpeg')
+                        picture.mime = mime_type
                         picture.desc = 'Front Cover'
-                        picture.data = response.content
+                        picture.data = image_data
                         
                         # Add picture to FLAC file
                         audio_file.add_picture(picture)
@@ -714,8 +745,7 @@ def update_album_metadata(file_path, metadata, audio_file=None, options=None, ca
                         
                         # Add new cover art
                         try:
-                            mime_type = response.headers.get('content-type', 'image/jpeg')
-                            log_message(f"[COVER] Adding new cover art: {len(response.content)} bytes, mime: {mime_type}")
+                            log_message(f"[COVER] Adding new cover art: {len(image_data)} bytes, mime: {mime_type}")
                             
                             # Always use type 3 (front cover) for new cover art
                             audio_file.tags.add(
@@ -724,7 +754,7 @@ def update_album_metadata(file_path, metadata, audio_file=None, options=None, ca
                                     mime=mime_type,
                                     type=3,  # Front cover
                                     desc='Front Cover',
-                                    data=response.content
+                                    data=image_data
                                 )
                             )
                             log_message(f"[COVER] Successfully added front cover APIC frame")
@@ -738,9 +768,6 @@ def update_album_metadata(file_path, metadata, audio_file=None, options=None, ca
                         log_message(f"[COVER] Updating cover art for MP4/M4A file")
                         
                         try:
-                            # Get the image data and content type
-                            image_data = response.content
-                            mime_type = response.headers.get('content-type', 'image/jpeg')
                             log_message(f"[COVER] Adding cover art: {len(image_data)} bytes, mime: {mime_type}")
                             
                             # Determine correct cover format based on mime type
@@ -761,8 +788,6 @@ def update_album_metadata(file_path, metadata, audio_file=None, options=None, ca
                             log_message(f"[COVER] Error updating MP4 cover art: {e}")
                     else:
                         log_message(f"[COVER] Album art update not supported for this file type: {type(audio_file).__name__}")
-                else:
-                    log_message(f"[ERROR] Failed to download cover image (Status {response.status_code})")
             except Exception as e:
                 log_message(f"[ERROR] Failed to update cover art: {str(e)}")
 

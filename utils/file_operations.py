@@ -202,8 +202,28 @@ def handle_drop(files, file_list_var=None, processed_files=None, updated_files=N
             if norm_path not in seen:
                 seen.add(norm_path)
                 all_paths.append(path)
+        
+        # Remove parent directories if their child directories are also in the list
+        # This prevents adding files from parent folders when only the child was dragged
+        filtered_paths = []
+        for path in all_paths:
+            norm_path = os.path.normpath(path)
+            # Check if this path is a parent of any other path in the list
+            is_parent = False
+            for other_path in all_paths:
+                if path != other_path:
+                    norm_other = os.path.normpath(other_path)
+                    # Check if norm_other starts with norm_path (meaning norm_path is a parent)
+                    # We need to ensure it's a directory boundary, not just a prefix
+                    if norm_other.startswith(norm_path + os.sep):
+                        is_parent = True
+                        log_message(f"[DEBUG] Excluding parent path '{path}' because child '{other_path}' exists")
+                        break
+            
+            if not is_parent:
+                filtered_paths.append(path)
                 
-        dropped_paths = all_paths
+        dropped_paths = filtered_paths
     
     log_message(f"[DEBUG] Found {len(dropped_paths)} valid paths to process")
     

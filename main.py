@@ -778,14 +778,19 @@ def play_selected_files():
     try:
         # Use the appropriate command based on the operating system
         if platform.system() == 'Windows':
-            for file in files_to_play:
-                os.startfile(file)
+            # On Windows, create a temporary M3U playlist to preserve order
+            import tempfile
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.m3u', delete=False, encoding='utf-8') as playlist:
+                playlist.write('\n'.join(files_to_play))
+                playlist_path = playlist.name
+            os.startfile(playlist_path)
+            log_message(f"[SUCCESS] Playing {len(files_to_play)} files via playlist", log_type="processing")
         elif platform.system() == 'Darwin':  # macOS
             subprocess.call(['open'] + files_to_play)
+            log_message(f"[SUCCESS] Playing {len(files_to_play)} files in table order", log_type="processing")
         else:  # Linux and others
             subprocess.call(['xdg-open'] + files_to_play)
-        
-        log_message(f"[SUCCESS] Playing {len(files_to_play)} files in table order", log_type="processing")
+            log_message(f"[SUCCESS] Playing {len(files_to_play)} files in table order", log_type="processing")
     except Exception as e:
         log_message(f"[ERROR] Failed to play files: {str(e)}", log_type="processing")
 
