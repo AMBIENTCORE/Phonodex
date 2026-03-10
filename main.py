@@ -1610,7 +1610,7 @@ def process_metadata_fields(selected_items, values_by_field):
             for field, value in table_mapping.items():
                 values_by_field[field].append(str(value) if value is not None else "")
     
-    # Set values in all fields (unchanged)
+    # Set values in all fields (strip to avoid displaying/saving Excel paste artifacts like CR/LF)
     for field, var in basic_field_vars.items():
         values = values_by_field[field]
         
@@ -1618,7 +1618,7 @@ def process_metadata_fields(selected_items, values_by_field):
             var.set("")
         elif len(set(values)) == 1:
             # All values are the same
-            var.set(values[0])
+            var.set(str(values[0]).strip() if values[0] else "")
         else:
             # Different values
             var.set("<different values>")
@@ -1632,8 +1632,8 @@ def apply_basic_fields():
         log_message("[ERROR] No files selected for updating", log_type="processing")
         return
     
-    # Get values from basic fields
-    new_metadata = {field: var.get() for field, var in basic_field_vars.items()}
+    # Get values from basic fields (strip to remove Excel paste artifacts like CR/LF)
+    new_metadata = {field: str(var.get()).strip() for field, var in basic_field_vars.items()}
     
     # Only skip fields with "<different values>" but allow empty strings
     new_metadata = {k: v for k, v in new_metadata.items() if v != "<different values>"}
