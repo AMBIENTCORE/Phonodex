@@ -49,6 +49,21 @@ def auto_adjust_column_widths(file_table, columns):
         if col == "File Path":
             file_table.column(col, width=0, minwidth=0, stretch=False)
 
+def _parse_track_sort_number(raw):
+    """Return the leading track index from tag values like '4', '04', or '4/12'."""
+    s = str(raw).strip()
+    if not s:
+        return None
+    if "/" in s:
+        s = s.split("/", 1)[0].strip()
+    if not s:
+        return None
+    try:
+        return float(s)
+    except ValueError:
+        return None
+
+
 def treeview_sort_column(tv, col, reverse, columns):
     """Sort treeview content when a column header is clicked.
     
@@ -60,13 +75,29 @@ def treeview_sort_column(tv, col, reverse, columns):
     """
     # Get all items in the table
     l = [(tv.set(k, col), k) for k in tv.get_children('')]
-    
-    try:
-        # Try to sort as numbers if possible
-        l.sort(key=lambda t: float(t[0]), reverse=reverse)
-    except ValueError:
-        # Fall back to string sort if not numbers
-        l.sort(key=lambda t: t[0].lower(), reverse=reverse)  # Case-insensitive sort
+
+    if col == "Track":
+        numeric_rows = []
+        text_rows = []
+        blank_rows = []
+        for val, k in l:
+            n = _parse_track_sort_number(val)
+            if n is not None:
+                numeric_rows.append((n, val, k))
+            elif str(val).strip() == "":
+                blank_rows.append((val, k))
+            else:
+                text_rows.append((str(val).lower(), val, k))
+        numeric_rows.sort(key=lambda t: t[0], reverse=reverse)
+        text_rows.sort(key=lambda t: t[0], reverse=False)
+        l = [(v, k) for _, v, k in numeric_rows] + [(v, k) for _, v, k in text_rows] + blank_rows
+    else:
+        try:
+            # Try to sort as numbers if possible
+            l.sort(key=lambda t: float(t[0]), reverse=reverse)
+        except ValueError:
+            # Fall back to string sort if not numbers
+            l.sort(key=lambda t: t[0].lower(), reverse=reverse)  # Case-insensitive sort
 
     # Rearrange items in sorted positions
     for index, (val, k) in enumerate(l):

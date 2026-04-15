@@ -72,8 +72,6 @@ pip install -r requirements.txt
 python3 main.py
 ```
 
-## File Exporting
-
 The application stores the destination folder for exporting in `folder_format_settings.json`. The default structure format (that I use) is:
 
 ```
