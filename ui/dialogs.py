@@ -4,7 +4,7 @@ Dialog windows for the Phonodex application.
 
 import tkinter as tk
 from tkinter import ttk, StringVar, messagebox
-from config import Config, folder_format, DEFAULT_FOLDER_FORMAT, save_settings
+from config import Config, folder_format, DEFAULT_FOLDER_FORMAT
 from ui.styles import style_button, create_styled_entry, style_label
 import os
 

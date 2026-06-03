@@ -15,51 +15,6 @@ from utils.file_operations import resource_path
 # This allows us to bypass clipboard compression/decompression entirely
 _original_image_data = None
 
-def get_image_from_clipboard():
-    """
-    Retrieves an image from the system clipboard.
-    
-    Returns:
-        bytes: Image data in bytes if an image is on the clipboard, None otherwise
-    """
-    global _original_image_data
-    
-    # PRIMARY METHOD: Use cached original image data if available (lossless)
-    if _original_image_data is not None:
-        log_message("[INFO] Using cached original image data (lossless transfer)")
-        data = _original_image_data
-        _original_image_data = None  # Clear after using once
-        return data
-        
-    # FALLBACK: Handle external clipboard data if no cached image is available
-    try:
-        win32clipboard.OpenClipboard()
-        
-        if win32clipboard.IsClipboardFormatAvailable(win32con.CF_DIB):
-            data = win32clipboard.GetClipboardData(win32con.CF_DIB)
-            
-            # Process clipboard bitmap data
-            stream = io.BytesIO(data)
-            img = Image.open(stream)
-            
-            # Convert to JPEG format for album art
-            output = io.BytesIO()
-            if img.mode == 'RGBA':
-                img = img.convert('RGB')
-            img.save(output, format='JPEG')
-            image_data = output.getvalue()
-            
-            log_message("[INFO] Retrieved external image from clipboard (converted to JPEG)")
-            return image_data
-        else:
-            log_message("[INFO] No image data found on clipboard")
-            return None
-    except Exception as e:
-        log_message(f"[ERROR] Failed to get image from clipboard: {str(e)}")
-        return None
-    finally:
-        win32clipboard.CloseClipboard()
-
 def copy_image_to_clipboard(image_data):
     """
     Copies an image to the system clipboard.
@@ -102,74 +57,6 @@ def copy_image_to_clipboard(image_data):
     finally:
         if clipboard_opened:
             win32clipboard.CloseClipboard()
-
-def resize_image(image_data, size=(240, 240)):
-    """
-    Resize an image to the specified dimensions.
-    
-    Args:
-        image_data: Image data in bytes
-        size: Tuple of (width, height)
-        
-    Returns:
-        bytes: Resized image data
-    """
-    try:
-        # Create an image from the data
-        img = Image.open(io.BytesIO(image_data))
-        
-        # Resize the image
-        resized_img = img.resize(size, Image.Resampling.LANCZOS)
-        
-        # Convert back to bytes
-        output = io.BytesIO()
-        # Determine format to use - default to JPEG for album art
-        if img.format and img.format.lower() in ('png', 'gif') and has_alpha(resized_img):
-            # Keep PNG only if it has transparency
-            resized_img.save(output, format=img.format)
-        else:
-            # Convert to RGB if needed
-            if resized_img.mode == 'RGBA':
-                resized_img = resized_img.convert('RGB')
-            # Use JPEG for all other images (better for album art)
-            resized_img.save(output, format='JPEG')
-        
-        return output.getvalue()
-    except Exception as e:
-        log_message(f"[ERROR] Failed to resize image: {str(e)}")
-        return image_data  # Return original on failure
-
-def has_alpha(img):
-    """Check if an image has an alpha channel that's in use."""
-    if img.mode == 'RGBA':
-        # Check if image actually uses the alpha channel
-        return img.split()[3].getextrema()[0] < 255
-    return False
-
-def create_photo_image(image_data, size=(240, 240)):
-    """
-    Create a PhotoImage object from image data for display in tkinter.
-    
-    Args:
-        image_data: Image data in bytes
-        size: Tuple of (width, height) for resizing
-        
-    Returns:
-        PhotoImage: A PhotoImage object for display in tkinter
-    """
-    try:
-        # Open the image from bytes
-        img = Image.open(io.BytesIO(image_data))
-        
-        # Resize the image
-        img = img.resize(size, Image.Resampling.LANCZOS)
-        
-        # Create a PhotoImage
-        photo = ImageTk.PhotoImage(img)
-        return photo
-    except Exception as e:
-        log_message(f"[ERROR] Failed to create PhotoImage: {str(e)}")
-        return None
 
 def load_default_album_art(default_image_path, label=None, size=(240, 240)):
     """

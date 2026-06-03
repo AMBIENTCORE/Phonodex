@@ -7,40 +7,24 @@ import tkinter as tk
 import subprocess
 import platform
 from tkinterdnd2 import DND_FILES, TkinterDnD
-from collections import Counter
-from mutagen.easyid3 import EasyID3
-from mutagen.mp3 import MP3
-from mutagen.flac import FLAC, Picture
-from mutagen.mp4 import MP4
-from mutagen.oggvorbis import OggVorbis
-from mutagen.asf import ASF
-from mutagen.wave import WAVE
-from mutagen.id3 import ID3, APIC, TPE1, TIT2, TALB, TPE2, TXXX, TDRC, TRCK, TCON
 import threading
-from config import Config, load_settings, save_settings, folder_format, DEFAULT_FOLDER_FORMAT
+from config import Config, folder_format, DEFAULT_FOLDER_FORMAT
 from utils.logging import logger, log_message, autohide_scrollbar
 from utils.file_operations import (resource_path, select_files as file_ops_select_files, 
                                  select_folder as file_ops_select_folder, handle_drop as file_ops_handle_drop, 
-                                 get_audio_file, sanitize_filename,
-                                 move_file_to_destination, copy_file_to_destination)
-from utils.image_handling import (get_image_from_clipboard, copy_image_to_clipboard, 
-                                resize_image, create_photo_image, 
+                                 get_audio_file, sanitize_filename)
+from utils.image_handling import (copy_image_to_clipboard, 
                                 load_default_album_art as image_load_default_album_art,
                                 update_album_art_display as image_update_album_art_display,
                                 paste_image_from_clipboard as image_paste_from_clipboard,
                                 extract_album_art_from_file)
 from utils.metadata import (
-    get_tag_value, set_tag_value, select_by_frequency,
-    fetch_metadata as metadata_fetch_metadata, update_album_metadata, update_tag_by_column,
+    get_tag_value, set_tag_value,
+    fetch_metadata as metadata_fetch_metadata, update_album_metadata,
     album_catalog_cache, cache_lock, update_mp3_metadata as metadata_update_mp3_metadata
 )
-from services.api_client import (
-    make_api_request, update_api_entry_style, save_api_key,
-    update_api_progress, enforce_api_limit, update_rate_limits_from_headers,
-    rate_limit_total, rate_limit_used, rate_limit_remaining, first_request_time
-)
+from services.api_client import save_api_key
 import hashlib
-from array import array
 from ui.dialogs import show_folder_format_dialog, show_move_confirmation_dialog
 from utils.table_operations import (
     auto_adjust_column_widths, 
@@ -51,7 +35,7 @@ from utils.table_operations import (
     apply_filter as table_apply_filter,
     remove_selected_items as table_ops_remove_items  # Add this import
 )
-from ui.styles import (configure_styles, style_button, style_entry, style_label, style_checkbutton, configure_context_menu,
+from ui.styles import (configure_styles, style_button, style_label, style_checkbutton, configure_context_menu,
                       update_progress_bar_style, set_api_entry_style, configure_text_tags,
                       configure_table_columns, configure_table_tags, create_styled_button,
                       create_styled_entry, create_styled_text, create_button_pair)
@@ -62,7 +46,6 @@ from ui.styles import (configure_styles, style_button, style_entry, style_label,
 # (now imported from utils.metadata)
 processed_lock = threading.Lock()  # Lock for thread-safe processed files access
 file_metadata_cache = {}  # Cache for file metadata
-shared_album_art_files = set()  # Set of files that share the currently pending album art
 
 # Track selected folders for refresh functionality
 selected_folders = set()  # Store paths of selected folders
@@ -112,6 +95,20 @@ app.title(Config.WINDOW_TITLE)
 app.geometry(Config.WINDOW_SIZE)
 app.minsize(*Config.MIN_WINDOW_SIZE)
 
+# Set window/taskbar icon (separate from the .exe icon set via PyInstaller --icon).
+# Uses iconbitmap with the .ico on Windows; falls back to iconphoto with the PNG
+# on other platforms or if the .ico is missing.
+try:
+    _icon_ico = resource_path("assets/phonodex.ico")
+    if os.path.exists(_icon_ico):
+        app.iconbitmap(default=_icon_ico)
+    else:
+        _icon_png = resource_path("assets/phonodex.png")
+        if os.path.exists(_icon_png):
+            app.iconphoto(True, tk.PhotoImage(file=_icon_png))
+except Exception as _e:
+    print(f"[WARN] Could not set window icon: {_e}")
+
 # Set ttk style to clam
 style = ttk.Style()
 
@@ -120,35 +117,76 @@ custom_font_path = resource_path(Config.STYLES["CUSTOM_FONT"]["FILE"])
 if not os.path.exists(custom_font_path):
     raise FileNotFoundError(f"Required font file '{custom_font_path}' not found! Please ensure it's in the same directory as the script.")
 
-# EMBED the font directly into tkinter - this is the standard approach
-try:
-    # Check if font is already available
-    available_fonts = font.families()
-    if Config.STYLES["CUSTOM_FONT"]["FAMILY"] not in available_fonts:
-        # Try to load the font using the correct tkinter method
-        # For external fonts, we need to use a different approach
-        import platform
-        if platform.system() == 'Windows':
-            # On Windows, try to copy font to temp directory and load it
-            import tempfile
-            import shutil
-            
-            # Create a temporary copy of the font
-            temp_font_path = os.path.join(tempfile.gettempdir(), os.path.basename(custom_font_path))
-            shutil.copy2(custom_font_path, temp_font_path)
-            
-            # Try to load from temp location
-            app.tk.call('tk', 'fontCreate', Config.STYLES["CUSTOM_FONT"]["FAMILY"], 
-                        '-file', temp_font_path)
+# Register the bundled font with the OS for the current process only.
+# This makes the font usable by Tk WITHOUT installing it system-wide,
+# so the packaged .exe runs on any machine without prompting the user
+# to install "I pixel u" first.
+def _register_private_font(font_path):
+    """Register a font file for use by the current process only.
+
+    Returns True on success. On Windows, uses AddFontResourceExW with
+    FR_PRIVATE so the font is visible to GDI/Tk for this process only
+    and is automatically released when the process exits.
+    """
+    import platform
+    system = platform.system()
+    try:
+        if system == 'Windows':
+            import ctypes
+            FR_PRIVATE = 0x10
+            # AddFontResourceExW returns number of fonts added, 0 on failure
+            added = ctypes.windll.gdi32.AddFontResourceExW(
+                ctypes.c_wchar_p(font_path), FR_PRIVATE, 0
+            )
+            if added > 0:
+                # Notify other windows that the font table changed.
+                # Use SendMessageTimeoutW (not SendMessageW) because the
+                # broadcast otherwise blocks until every top-level window
+                # in the OS responds, which can deadlock app startup if
+                # any other process is hung. SMTO_ABORTIFHUNG + 100 ms
+                # cap means we never wait on unresponsive windows.
+                HWND_BROADCAST = 0xFFFF
+                WM_FONTCHANGE = 0x001D
+                SMTO_ABORTIFHUNG = 0x0002
+                result = ctypes.c_ulong(0)
+                ctypes.windll.user32.SendMessageTimeoutW(
+                    HWND_BROADCAST, WM_FONTCHANGE, 0, 0,
+                    SMTO_ABORTIFHUNG, 100, ctypes.byref(result)
+                )
+                return True
+            return False
+        elif system == 'Darwin':
+            # macOS: use CoreText to register the font for the process
+            import ctypes
+            from ctypes import util
+            ct = ctypes.cdll.LoadLibrary(util.find_library('CoreText'))
+            cf = ctypes.cdll.LoadLibrary(util.find_library('CoreFoundation'))
+            url = cf.CFURLCreateFromFileSystemRepresentation(
+                None, font_path.encode('utf-8'), len(font_path), False
+            )
+            # kCTFontManagerScopeProcess = 1
+            return bool(ct.CTFontManagerRegisterFontsForURL(url, 1, None))
         else:
-            # On other platforms, try direct loading
-            app.tk.call('tk', 'fontCreate', Config.STYLES["CUSTOM_FONT"]["FAMILY"], 
-                        '-file', custom_font_path)
-    
-    custom_font = font.Font(family=Config.STYLES["CUSTOM_FONT"]["FAMILY"], size=Config.FONTS["DEFAULT_SIZE"])
-    print(f"[SUCCESS] Custom font '{Config.STYLES['CUSTOM_FONT']['FAMILY']}' embedded successfully")
+            # Linux: no portable per-process registration. Fall back to
+            # Tk's built-in loader below.
+            return False
+    except Exception:
+        return False
+
+try:
+    available_fonts = font.families()
+    family_name = Config.STYLES["CUSTOM_FONT"]["FAMILY"]
+
+    if family_name not in available_fonts:
+        # Try OS-level private registration first (best on Windows/macOS).
+        if not _register_private_font(custom_font_path):
+            # Fallback: Tk 8.6+ `font create -file`. Works on some
+            # platforms but does not register the family name with GDI.
+            app.tk.call('tk', 'fontCreate', family_name, '-file', custom_font_path)
+
+    custom_font = font.Font(family=family_name, size=Config.FONTS["DEFAULT_SIZE"])
+    print(f"[SUCCESS] Custom font '{family_name}' embedded successfully")
 except Exception as e:
-    # If embedding fails, crash the app - no fallbacks
     raise RuntimeError(f"Failed to embed custom font '{Config.STYLES['CUSTOM_FONT']['FAMILY']}': {e}. The application cannot run without the required font.")
 
 # Configure all styles
@@ -169,7 +207,6 @@ editing_column = None  # Track which column is being edited
 editing_entry = None  # Reference to the editing entry widget
 
 # Global variables
-current_song = None
 current_album_art = None
 current_album_art_bytes = None  # Store the raw bytes of the album art
 pending_album_art = None
@@ -329,7 +366,7 @@ def show_album_art_context_menu(event):
 # Function to paste image from clipboard
 def paste_image_from_clipboard():
     """Paste image from clipboard to album art display."""
-    global pending_album_art, shared_album_art_files, current_album_art, current_album_art_bytes
+    global pending_album_art, current_album_art, current_album_art_bytes
     
     # Use the function from utils.image_handling
     image_data = image_paste_from_clipboard()
@@ -337,19 +374,6 @@ def paste_image_from_clipboard():
     if image_data:
         # Store the image data for later saving
         pending_album_art = image_data
-        
-        # Record which files share this album art (all selected files)
-        selected_items = file_table.selection()
-        shared_album_art_files.clear()  # Clear previous sharing
-        
-        for item in selected_items:
-            values = file_table.item(item)['values']
-            file_path = values[-1]  # Last column is file path
-            if file_path:
-                # Normalize the path to ensure consistent comparison
-                normalized_path = os.path.normpath(file_path)
-                shared_album_art_files.add(normalized_path)
-                log_message(f"[COVER] Marked file as sharing pending album art: {os.path.basename(file_path)}", log_type="debug")
         
         # Display the image
         current_album_art_bytes = image_data
@@ -361,7 +385,6 @@ def paste_image_from_clipboard():
         )
         current_album_art = photo
         log_message("[COVER] Image pasted from clipboard (not saved until 'SAVE METADATA' is clicked)", log_type="processing")
-        log_message(f"[COVER] Marked {len(shared_album_art_files)} files as sharing the same album art", log_type="debug")
 
 # Function to remove the album art
 def remove_album_art():
@@ -582,11 +605,6 @@ file_table.dnd_bind('<<Drop>>', lambda e: file_ops_handle_drop(
     update_table_func=update_table
 ))
 
-# Configure table borders and remove extra spacing
-style.layout("Treeview", [
-    ('Treeview.treearea', {'sticky': 'nswe'})
-])
-
 # Add scrollbar to table with autohide
 table_scrollbar = ttk.Scrollbar(table_border_frame, orient="vertical", command=file_table.yview)
 file_table.configure(yscrollcommand=lambda f, l: autohide_scrollbar(table_scrollbar, f, l))
@@ -597,14 +615,6 @@ table_scrollbar.grid_remove()  # Hide initially instead of showing
 table_border_frame.columnconfigure(0, weight=1)
 table_border_frame.columnconfigure(1, weight=0, minsize=0)  # Set minsize to 0 to prevent reserved space
 table_border_frame.rowconfigure(0, weight=1)
-
-style.layout("Treeview.Heading", [
-    ("Treeview.Heading.cell", {'sticky': 'nswe'}),
-    ("Treeview.Heading.padding", {'sticky': 'nswe', 'children': [
-        ("Treeview.Heading.image", {'side': 'right', 'sticky': ''}),
-        ("Treeview.Heading.text", {'sticky': 'we'})
-    ]})
-])
 
 # Configure table tags
 configure_table_tags(file_table)
@@ -862,7 +872,7 @@ def stop_processing_files():
 
 def start_processing():
     """Start processing files in a separate thread."""
-    global processing_thread, stop_processing
+    global stop_processing
     
     stop_processing = False
     processing_thread = threading.Thread(target=process_files)
@@ -1344,7 +1354,8 @@ def refresh_file_list():
     
     # Re-scan all selected folders - but only scan the exact folder, not the entire tree
     folder_files = []
-    for folder in selected_folders:
+    # Iterate over a snapshot so we can safely remove vanished folders inside the loop
+    for folder in list(selected_folders):
         if os.path.exists(folder):  # Check if folder still exists
             log_message(f"[DEBUG] Scanning folder: {folder}")
             # Only scan the selected folder itself, not recursively through subfolders
@@ -1437,7 +1448,7 @@ def refresh_file_list():
 
 def update_basic_fields(event=None):
     """Update the basic fields based on table selection."""
-    global current_album_art, current_album_art_bytes, file_metadata_cache, pending_album_art, shared_album_art_files
+    global current_album_art, current_album_art_bytes, file_metadata_cache, pending_album_art
     
     # Get the selected items
     selected_items = file_table.selection()
@@ -1453,16 +1464,6 @@ def update_basic_fields(event=None):
     
     # Get values for all selected items
     values_by_field = {field: [] for field in basic_field_vars.keys()}
-    
-    # Check if multiple albums are selected
-    albums = set()
-    artists = set()
-    for item in selected_items:
-        values = file_table.item(item)['values']
-        if values[2]:  # Album
-            albums.add(values[2])
-        if values[0]:  # Artist
-            artists.add(values[0])
     
     # Keep pending album art if available
     if pending_album_art and pending_album_art != "REMOVE":
@@ -1484,7 +1485,6 @@ def update_basic_fields(event=None):
     art_data = None
     found_album_art = False
     different_art = False
-    first_file_path = None
     
     log_message(f"[DEBUG] Checking album art for {len(selected_items)} selected items", log_type="debug")
     
@@ -1506,9 +1506,6 @@ def update_basic_fields(event=None):
             
         # Make sure this is a string
         file_path = str(file_path)
-        
-        if first_file_path is None:
-            first_file_path = file_path
             
         log_message(f"[DEBUG] Processing file for album art: {file_path}", log_type="debug")
             
@@ -1625,7 +1622,7 @@ def process_metadata_fields(selected_items, values_by_field):
 
 def apply_basic_fields():
     """Apply metadata from basic fields to selected files."""
-    global pending_album_art, shared_album_art_files
+    global pending_album_art
     
     selected_items = file_table.selection()
     if not selected_items:
@@ -1656,7 +1653,6 @@ def apply_basic_fields():
     
     # Process each selected item
     updated_count = 0
-    album_art_updated_files = []  # Track files that had album art updated
     
     for item in selected_items:
         values = file_table.item(item)['values']
@@ -1759,7 +1755,6 @@ def apply_basic_fields():
                                     )
                                 )
                                 updated = True
-                                album_art_updated_files.append(matching_file)
                                 log_message(f"[SUCCESS] Updated album art for {os.path.basename(matching_file)}")
                             elif isinstance(audio, mutagen.flac.FLAC):
                                 # Clear existing pictures
@@ -1775,7 +1770,6 @@ def apply_basic_fields():
                                 # Add picture to FLAC file
                                 audio.add_picture(picture)
                                 updated = True
-                                album_art_updated_files.append(matching_file)
                                 log_message(f"[SUCCESS] Updated album art for {os.path.basename(matching_file)}")
                             elif isinstance(audio, mutagen.mp4.MP4):
                                 # MP4 requires special handling
@@ -1791,7 +1785,6 @@ def apply_basic_fields():
                                 cover = MP4Cover(pending_album_art, cover_format)
                                 audio['covr'] = [cover]
                                 updated = True
-                                album_art_updated_files.append(matching_file)
                                 log_message(f"[SUCCESS] Updated album art for {os.path.basename(matching_file)}")
                             else:
                                 log_message(f"[WARNING] Album art update not supported for this file type: {type(audio).__name__}")
@@ -1825,17 +1818,7 @@ def apply_basic_fields():
             except Exception as e:
                 log_message(f"[ERROR] Failed to update {os.path.basename(matching_file)}: {str(e)}")
     
-    # Update shared_album_art_files set with files that now have the same album art
-    if album_art_updated_files:
-        # Update the set of files that share the art
-        for file_path in album_art_updated_files:
-            # Normalize the path to ensure consistent comparison
-            normalized_path = os.path.normpath(file_path)
-            shared_album_art_files.add(normalized_path)
-        log_message(f"[COVER] Total files with shared album art: {len(shared_album_art_files)}", log_type="debug")
-    
     # Reset pending album art only if we've successfully applied all updates
-    # We'll keep the shared_album_art_files list for use in other functions
     pending_album_art = None
     
     if updated_count > 0:
@@ -1924,13 +1907,13 @@ def organize_files_with_format():
     # Always reload the latest folder format from the settings file
     import json
     try:
-        with open('folder_format_settings.json', 'r') as f:
+        with open(Config.FOLDER_STRUCTURE["SETTINGS_FILE"], 'r') as f:
             settings = json.load(f)
             current_folder_format = settings.get('folder_format', DEFAULT_FOLDER_FORMAT)
             log_message(f"[INFO] Loaded folder format from settings: {current_folder_format}", log_type="processing")
     except Exception as e:
         log_message(f"[ERROR] Failed to load folder format from settings: {str(e)}", log_type="processing")
-        current_folder_format = folder_format  # Fall back to imported value
+        current_folder_format = DEFAULT_FOLDER_FORMAT
     
     # Get selected items
     selected_items = file_table.selection()
@@ -1999,12 +1982,7 @@ def organize_files_with_format():
         elif ";" in genre:
             genre = genre.split(";")[0].strip()
             log_message(f"[INFO] Using first genre component: {genre}")
-            
-        # Handle genre with semicolon separator - take only the part before first semicolon
-        if ";" in genre:
-            genre = genre.split(";")[0].strip()
-            log_message(f"[INFO] Using first genre component: {genre}")
-            
+
         # Sanitize values for use in paths
         from utils.file_operations import sanitize_filename as file_ops_sanitize_filename
         safe_genre = file_ops_sanitize_filename(genre)

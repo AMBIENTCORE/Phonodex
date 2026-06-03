@@ -6,7 +6,6 @@ Provides functionality for file handling, selection, path manipulation, and audi
 import os
 import sys
 import re
-import shutil
 from tkinter import filedialog
 from utils.logging import log_message
 
@@ -33,7 +32,9 @@ def resource_path(relative_path):
         # PyInstaller creates a temp folder and stores path in _MEIPASS
         base_path = sys._MEIPASS
     except Exception:
-        base_path = os.path.abspath(".")
+        # Anchor to the project root (parent of utils/) so paths resolve
+        # correctly regardless of the current working directory.
+        base_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     
     return os.path.join(base_path, relative_path)
 
@@ -51,7 +52,9 @@ def select_files(file_type_description, supported_extensions, file_list_var=None
     Returns:
         List of selected file paths
     """
-    files = filedialog.askopenfilenames(filetypes=[(file_type_description, "*" + supported_extensions[0])])
+    # Build filter pattern with all supported extensions (space-separated for tkinter)
+    pattern = " ".join("*" + ext for ext in supported_extensions)
+    files = filedialog.askopenfilenames(filetypes=[(file_type_description, pattern)])
     
     selected_files = list(files)  # Convert to list
     
@@ -334,53 +337,3 @@ def sanitize_filename(filename):
     filename = filename.strip(' .')
     
     return filename
-
-def move_file_to_destination(source_path, dest_path, create_dirs=True):
-    """
-    Move a file to a destination path, creating directories if needed.
-    
-    Args:
-        source_path: Source file path
-        dest_path: Destination file path
-        create_dirs: Whether to create destination directories if they don't exist
-        
-    Returns:
-        True if successful, False otherwise
-    """
-    try:
-        # Create destination directories if needed
-        if create_dirs:
-            dest_dir = os.path.dirname(dest_path)
-            os.makedirs(dest_dir, exist_ok=True)
-            
-        # Move the file
-        shutil.move(source_path, dest_path)
-        return True
-    except Exception as e:
-        log_message(f"[ERROR] Failed to move file from {source_path} to {dest_path}: {str(e)}")
-        return False
-
-def copy_file_to_destination(source_path, dest_path, create_dirs=True):
-    """
-    Copy a file to a destination path, creating directories if needed.
-    
-    Args:
-        source_path: Source file path
-        dest_path: Destination file path
-        create_dirs: Whether to create destination directories if they don't exist
-        
-    Returns:
-        True if successful, False otherwise
-    """
-    try:
-        # Create destination directories if needed
-        if create_dirs:
-            dest_dir = os.path.dirname(dest_path)
-            os.makedirs(dest_dir, exist_ok=True)
-            
-        # Copy the file
-        shutil.copy2(source_path, dest_path)
-        return True
-    except Exception as e:
-        log_message(f"[ERROR] Failed to copy file from {source_path} to {dest_path}: {str(e)}")
-        return False

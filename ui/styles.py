@@ -167,10 +167,6 @@ def configure_styles(style, custom_font):
                    background=Config.COLORS["BACKGROUND"],
                    foreground=Config.COLORS["TEXT"])
 
-    # Entry validation styles with dark theme
-    style.configure('Valid.TEntry', fieldbackground=Config.COLORS["VALID_ENTRY"], foreground=Config.COLORS["TEXT"])
-    style.configure('Invalid.TEntry', fieldbackground=Config.COLORS["INVALID_ENTRY"], foreground=Config.COLORS["TEXT"])
-
     # Custom checkbutton style with dark theme
     style.configure('Custom.TCheckbutton', 
                    font=(Config.STYLES["CUSTOM_FONT"]["FAMILY"], Config.FONTS["DEFAULT_SIZE"]),
@@ -184,10 +180,6 @@ def configure_styles(style, custom_font):
     style.configure("Gradient.Horizontal.TProgressbar",
                    background=Config.COLORS["SUCCESS"],
                    troughcolor=Config.COLORS["PROGRESSBAR"]["TROUGH"])
-
-    # Table row status styles with dark theme
-    style.configure("updated", background=Config.COLORS["UPDATED_ROW"])
-    style.configure("failed", background=Config.COLORS["FAILED_ROW"])
 
 def update_progress_bar_style(style, progress, bar_type="file"):
     """Update progress bar color based on progress value.

@@ -16,6 +16,7 @@ from collections import Counter
 import time
 import threading
 import os
+import re
 from services.api_client import make_api_request
 
 # Cache for metadata results
@@ -298,6 +299,171 @@ def select_by_frequency(releases):
     
     return matching_release, normalized_catalog
 
+
+def _build_discogs_api_base(search_url):
+    """Derive the Discogs API base URL from the configured search endpoint."""
+    if "/database/search" in search_url:
+        return search_url.split("/database/search")[0]
+    return "https://api.discogs.com"
+
+
+def _score_art_candidate(image_data):
+    """Score a Discogs image candidate and return (score, width, height)."""
+    score = 0.0
+    image_type = str(image_data.get("type", "")).lower()
+    uri = str(image_data.get("uri", "")).lower()
+    uri150 = str(image_data.get("uri150", "")).lower()
+    url_blob = f"{uri} {uri150}"
+
+    width = int(image_data.get("width", 0) or 0)
+    height = int(image_data.get("height", 0) or 0)
+
+    # Prefer Discogs primary images.
+    if image_type == "primary":
+        score += 4.0
+
+    # Prefer larger images.
+    longest_side = max(width, height)
+    if longest_side >= 1200:
+        score += 4.0
+    elif longest_side >= 800:
+        score += 2.0
+    elif longest_side >= 500:
+        score += 0.5
+    else:
+        score -= 3.0
+
+    # Prefer near-square images (typical album covers).
+    if width > 0 and height > 0:
+        ratio = width / height
+        square_distance = abs(1.0 - ratio)
+        if square_distance <= 0.08:
+            score += 2.0
+        elif square_distance <= 0.2:
+            score += 1.0
+        elif square_distance > 0.5:
+            score -= 2.5
+
+    # Penalize likely non-front-cover assets.
+    penalized_terms = (
+        "vinyl", "record", "disc", "label", "back", "rear", "spine",
+        "insert", "booklet", "runout", "matrix"
+    )
+    if re.search(r"\b(" + "|".join(penalized_terms) + r")\b", url_blob):
+        score -= 4.0
+
+    return score, width, height
+
+
+def _pick_best_art_image(images, source_label):
+    """Pick the highest-scoring image candidate from a Discogs images array."""
+    if not images:
+        return None
+
+    best = None
+    best_score = float("-inf")
+    for image_data in images:
+        uri = image_data.get("uri")
+        if not uri:
+            continue
+
+        score, width, height = _score_art_candidate(image_data)
+        candidate = {
+            "url": uri,
+            "thumb": image_data.get("uri150", ""),
+            "score": score,
+            "width": width,
+            "height": height,
+            "source": source_label,
+            "type": image_data.get("type", "")
+        }
+        if score > best_score:
+            best = candidate
+            best_score = score
+
+    return best
+
+
+def _is_candidate_poor(candidate):
+    """Heuristic check to decide if we should try master images."""
+    if not candidate:
+        return True
+    longest_side = max(candidate.get("width", 0), candidate.get("height", 0))
+    return candidate.get("score", 0) < 2.0 or longest_side < 800
+
+
+def _resolve_cover_art_from_discogs(selected_release, api_token, search_url):
+    """Resolve best cover art via release details, then master, then search fallback."""
+    release_id = selected_release.get("id")
+    if not release_id:
+        return selected_release.get("cover_image", ""), selected_release.get("thumb", "")
+    api_base = _build_discogs_api_base(search_url)
+    release_details_url = f"{api_base}/releases/{release_id}"
+    release_data, _ = make_api_request(release_details_url, {"token": api_token})
+
+    best_candidate = None
+    master_id = None
+
+    if release_data:
+        master_id = release_data.get("master_id")
+        best_candidate = _pick_best_art_image(release_data.get("images", []), "release")
+        if best_candidate:
+            log_message(
+                f"[COVER] Best release image score={best_candidate['score']:.2f}, "
+                f"size={best_candidate['width']}x{best_candidate['height']}, "
+                f"type={best_candidate['type']}"
+            )
+    else:
+        log_message(f"[COVER] Could not fetch release details for release id {release_id}")
+
+    # If release art is poor/absent, attempt master art as fallback upgrade.
+    if (not best_candidate or _is_candidate_poor(best_candidate)) and master_id:
+        master_url = f"{api_base}/masters/{master_id}"
+        master_data, _ = make_api_request(master_url, {"token": api_token})
+        if master_data:
+            master_candidate = _pick_best_art_image(master_data.get("images", []), "master")
+            if master_candidate:
+                log_message(
+                    f"[COVER] Best master image score={master_candidate['score']:.2f}, "
+                    f"size={master_candidate['width']}x{master_candidate['height']}, "
+                    f"type={master_candidate['type']}"
+                )
+                if not best_candidate or master_candidate["score"] > best_candidate["score"]:
+                    best_candidate = master_candidate
+        else:
+            log_message(f"[COVER] Could not fetch master details for master id {master_id}")
+
+    if best_candidate and best_candidate.get("url"):
+        return best_candidate["url"], best_candidate.get("thumb", "")
+
+    # Final fallback chain for robustness.
+    return selected_release.get("cover_image", ""), selected_release.get("thumb", "")
+
+
+def _resolve_cover_art(artist, album, selected_release, api_token, search_url):
+    """Resolve cover art using iTunes first (if enabled), then Discogs as fallback."""
+    # Try iTunes Search API first - it almost always returns the real front cover
+    # rather than vinyl photos / back covers / labels that Discogs sometimes serves.
+    try:
+        from config import Config
+        prefer_itunes = Config.ALBUM_ART.get("PREFER_ITUNES", True)
+    except Exception:
+        prefer_itunes = True
+
+    if prefer_itunes:
+        try:
+            from services.itunes_client import fetch_album_art_url
+            itunes_cover, itunes_thumb = fetch_album_art_url(artist, album)
+            if itunes_cover:
+                log_message(f"[COVER] Using iTunes art for '{artist} - {album}'")
+                return itunes_cover, itunes_thumb
+        except Exception as e:
+            log_message(f"[COVER] iTunes lookup raised, falling back to Discogs: {e}", log_type="debug")
+
+    # Discogs fallback (also the path when PREFER_ITUNES is disabled)
+    return _resolve_cover_art_from_discogs(selected_release, api_token, search_url)
+
+
 def fetch_metadata(artist, album, title=None, api_token=None, search_url=None):
     """Fetch the most common catalog number and essential metadata for an album.
     
@@ -576,13 +742,18 @@ def fetch_metadata(artist, album, title=None, api_token=None, search_url=None):
         if not selected_release or not normalized_catalog:
             return None, None
     
+    # Art-only enhancement: resolve better artwork after release selection
+    resolved_cover, resolved_thumb = _resolve_cover_art(
+        artist, selected_release.get("title", album), selected_release, api_token, search_url
+    )
+
     # Extract essential metadata
     metadata = {
         "catalog_number": normalized_catalog,  # Use normalized version
         "year": selected_release.get("year", ""),
         "album": selected_release.get("title", album),  # Use API's title if available, otherwise use original
-        "cover_image": selected_release.get("cover_image", ""),
-        "thumb": selected_release.get("thumb", "")
+        "cover_image": resolved_cover or selected_release.get("cover_image", ""),
+        "thumb": resolved_thumb or selected_release.get("thumb", "")
     }
     
     # Thread-safe cache update

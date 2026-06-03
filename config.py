@@ -5,13 +5,44 @@ Configuration management for Phonodex application.
 from pathlib import Path
 import json
 import os
+import sys
+
+# Project root (directory containing this config.py).
+# Used for bundled read-only assets when running as a script.
+_PROJECT_ROOT = Path(__file__).resolve().parent
+
+# User-data root: where api_key.txt, folder_format_settings.json, etc. live.
+# When frozen by PyInstaller, store user data in the standard per-user
+# location (%LOCALAPPDATA%\Phonodex on Windows). This survives uninstalls,
+# works regardless of whether the app is installed to Program Files
+# (read-only) or AppData, and matches how other Windows apps behave.
+# When running as a plain script, keep files next to the project for
+# convenience during development.
+if getattr(sys, 'frozen', False):
+    _local_appdata = os.environ.get('LOCALAPPDATA') or os.path.expanduser('~')
+    _USER_DATA_ROOT = Path(_local_appdata) / "Phonodex"
+    _USER_DATA_ROOT.mkdir(parents=True, exist_ok=True)
+    # One-time migration: if an old api_key.txt or settings file exists
+    # next to the .exe (from previous app versions), move it into the
+    # new location so the user doesn't have to re-enter their key.
+    _legacy_root = Path(sys.executable).resolve().parent
+    for _name in ("api_key.txt", "folder_format_settings.json"):
+        _legacy = _legacy_root / _name
+        _new = _USER_DATA_ROOT / _name
+        if _legacy.exists() and not _new.exists():
+            try:
+                _new.write_bytes(_legacy.read_bytes())
+            except Exception:
+                pass
+else:
+    _USER_DATA_ROOT = _PROJECT_ROOT
 
 # Default folder structure format
 DEFAULT_FOLDER_FORMAT = "D:\\Music\\Collection\\%genre%\\%year%\\[%catalognumber%] %albumartist% - %album%\\%artist% - %title%"
 folder_format = DEFAULT_FOLDER_FORMAT
 
-# Settings file path
-SETTINGS_FILE = "folder_format_settings.json"
+# Settings file path (anchored next to the exe when frozen, otherwise next to config.py)
+SETTINGS_FILE = str(_USER_DATA_ROOT / "folder_format_settings.json")
 
 def load_settings():
     """Load settings from file."""
@@ -25,17 +56,6 @@ def load_settings():
         print(f"Error loading settings: {e}")
         folder_format = DEFAULT_FOLDER_FORMAT
 
-def save_settings():
-    """Save settings to file."""
-    try:
-        with open(SETTINGS_FILE, 'w') as f:
-            settings = {
-                'folder_format': folder_format
-            }
-            json.dump(settings, f, indent=4)
-    except Exception as e:
-        print(f"Error saving settings: {e}")
-
 # Load settings at startup
 load_settings()
 
@@ -44,7 +64,7 @@ class Config:
     
     # API Configuration
     DISCOGS_SEARCH_URL = "https://api.discogs.com/database/search"
-    API_KEY_FILE = Path("api_key.txt")
+    API_KEY_FILE = _USER_DATA_ROOT / "api_key.txt"
     API = {
         "RATE_LIMIT": 60,
         "TIMEOUT": 10,
@@ -75,7 +95,8 @@ class Config:
     # Album Art Configuration
     ALBUM_ART = {
         "COVER_SIZE": 240,  # Default size for album art display
-        "DEFAULT_IMAGE": "assets/no_cover.png"  # Path to default "no cover" image
+        "DEFAULT_IMAGE": "assets/no_cover.png",  # Path to default "no cover" image
+        "PREFER_ITUNES": True  # Try iTunes Search API for album art before falling back to Discogs
     }
     
     # GUI Layout
