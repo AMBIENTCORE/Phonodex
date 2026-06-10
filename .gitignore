@@ -9,9 +9,6 @@ build/
 dist/
 *.spec
 
-# Inno Setup output
-installer/
-
 # Runtime / user data (never commit)
 api_key.txt
 folder_format_settings.json
