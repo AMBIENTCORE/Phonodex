@@ -7,35 +7,19 @@ import tkinter as tk
 
 class Logger:
     """
-    Logger class that handles sending messages to UI text widgets with fallback to console.
-    Supports different log types and special formatting for success/failure messages.
+    Logger class that handles sending messages to the debug log widget with
+    fallback to the console when the widget isn't available yet.
     """
     def __init__(self):
-        """Initialize the logger with empty widget references."""
+        """Initialize the logger with an empty widget reference."""
         self.debug_widget = None
-        self.processing_widget = None
         
     def set_debug_widget(self, widget):
-        """Set the widget for debug messages."""
+        """Set the widget for log messages."""
         self.debug_widget = widget
-        
-    def set_processing_widget(self, widget):
-        """Set the widget for processing messages."""
-        self.processing_widget = widget
     
-    def clear_logs(self, app=None, debug_scrollbar=None, processing_scrollbar=None):
-        """Clear both log widgets and reset their scrollbars."""
-        # Clear processing log box if it exists
-        if self.processing_widget:
-            self.processing_widget.configure(state="normal")
-            self.processing_widget.delete("1.0", "end")
-            self.processing_widget.configure(state="disabled")
-            
-            # Force scrollbar update for processing log
-            if processing_scrollbar:
-                self.processing_widget.yview_moveto(0)
-                autohide_scrollbar(processing_scrollbar, 0, 1)
-        
+    def clear_logs(self, app=None, debug_scrollbar=None):
+        """Clear the debug log box and reset its scrollbar."""
         # Clear debug log box if it exists
         if self.debug_widget:
             self.debug_widget.configure(state="normal")
@@ -53,51 +37,22 @@ class Logger:
     
     def log(self, message, log_type="debug"):
         """
-        Log messages in the appropriate text box based on type.
+        Log a message to the debug log widget.
         
         Args:
             message: The message text to log
-            log_type: Either "debug" (for technical messages) or "processing" (for operation results)
-                - "debug" messages will appear in the debug widget (technical information)
-                - "processing" messages will appear in the processing widget (success/failure results)
+            log_type: Retained for backward compatibility; all messages now go
+                to the single debug log widget.
         """
-        # Handle the case when UI elements aren't defined yet (early startup)
-        if log_type == "debug" and self.debug_widget is None:
+        # Handle the case when the UI isn't ready yet (early startup)
+        if self.debug_widget is None:
             print(f"Early log: {message}")
             return
-            
-        # Use debug widget as fallback if processing widget isn't defined yet
-        if log_type == "processing" and self.processing_widget is None:
-            if self.debug_widget is None:
-                print(f"Early log: {message}")
-                return
-            target_widget = self.debug_widget
-        else:
-            # Determine which widget to use based on message type
-            if (message.startswith("[OK]") or message.startswith("[NOK]") or 
-                message.startswith("[INFO] API Calls:")):
-                # Only OK/NOK messages and API counter go to processing widget
-                target_widget = self.processing_widget
-            else:
-                # Everything else goes to debug widget
-                target_widget = self.debug_widget
-            
-        target_widget.configure(state="normal")
-        
-        # Special handling for OK/NOK tags in processing messages
-        if message.startswith("[OK]") and target_widget == self.processing_widget:
-            target_widget.insert("end", "[OK] ", "ok")
-            target_widget.insert("end", message[4:] + "\n")
-        elif message.startswith("[NOK]") and target_widget == self.processing_widget:
-            target_widget.insert("end", "[NOK] ", "nok")
-            target_widget.insert("end", message[5:] + "\n")
-        elif message.startswith("[INFO] API Calls:"):
-            target_widget.insert("end", message + "\n", "api_call")
-        else:
-            target_widget.insert("end", message + "\n")
-            
-        target_widget.configure(state="disabled")
-        target_widget.see("end")  # Auto-scroll to the latest message
+
+        self.debug_widget.configure(state="normal")
+        self.debug_widget.insert("end", message + "\n")
+        self.debug_widget.configure(state="disabled")
+        self.debug_widget.see("end")  # Auto-scroll to the latest message
 
 
 def autohide_scrollbar(scrollbar, first, last):

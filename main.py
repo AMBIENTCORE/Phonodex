@@ -36,7 +36,7 @@ from utils.table_operations import (
     remove_selected_items as table_ops_remove_items  # Add this import
 )
 from ui.styles import (configure_styles, style_button, style_label, style_checkbutton, configure_context_menu,
-                      update_progress_bar_style, set_api_entry_style, configure_text_tags,
+                      update_progress_bar_style, set_api_entry_style,
                       configure_table_columns, configure_table_tags, create_styled_button,
                       create_styled_entry, create_styled_text, create_button_pair)
 
@@ -3155,9 +3155,7 @@ def clear_file_list():
 
 def clear_logs():
     """Clear the debug log box and reset its scrollbar."""
-    # processing_scrollbar is None because that widget was removed;
-    # logger.clear_logs handles a missing processing widget cleanly.
-    logger.clear_logs(app, debug_scrollbar, None)
+    logger.clear_logs(app, debug_scrollbar)
 
 # Add the function to open the folder in explorer
 def show_in_explorer():

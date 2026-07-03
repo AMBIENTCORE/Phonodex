@@ -762,9 +762,11 @@ def fetch_metadata(artist, album, title=None, api_token=None, search_url=None):
         if not selected_release or not normalized_catalog:
             return None, None
     
-    # Art-only enhancement: resolve better artwork after release selection
+    # Art-only enhancement: resolve better artwork after release selection.
+    # Pass the original album name (not the Discogs release title, which is in
+    # "Artist - Album" format) so the iTunes matcher scores against a clean title.
     resolved_cover, resolved_thumb = _resolve_cover_art(
-        artist, selected_release.get("title", album), selected_release, api_token, search_url
+        artist, album, selected_release, api_token, search_url
     )
 
     # Extract essential metadata

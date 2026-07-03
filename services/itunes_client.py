@@ -103,6 +103,16 @@ def fetch_album_art_url(artist, album, limit=10, target_size=1200):
     norm_artist = _normalize(artist)
     norm_album = _normalize(album)
 
+    # Without an artist we can't disambiguate generic titles (e.g. "Greatest Hits"),
+    # so an exact album-title match would otherwise pass on its own and pick random
+    # art. Require an artist and let Discogs supply the art when one isn't available.
+    if not norm_artist:
+        log_message(
+            f"[COVER][iTunes] No artist provided for '{album}'; skipping iTunes to avoid a random match",
+            log_type="debug"
+        )
+        return None, None
+
     term = urllib.parse.quote_plus(f"{artist or ''} {album}".strip())
     url = f"{ITUNES_SEARCH_URL}?term={term}&entity=album&limit={limit}"
 

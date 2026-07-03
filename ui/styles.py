@@ -96,16 +96,6 @@ def configure_context_menu(menu):
         tearoff=0
     )
 
-def configure_text_tags(text_widget):
-    """Configure standard text tags for a text widget.
-    
-    Args:
-        text_widget: The tk.Text widget to configure tags for
-    """
-    text_widget.tag_config("ok", foreground="#006400")  # Dark green
-    text_widget.tag_config("nok", foreground="#8B0000")  # Dark red
-    text_widget.tag_config("api_call", foreground="#0000CD")  # Medium blue
-
 def configure_styles(style, custom_font):
     """Configure all ttk styles for the application.
     
