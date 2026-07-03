@@ -7,13 +7,13 @@
 ; you're forking to create a genuinely different application.
 AppId={{A8F3E2D1-6B4C-4A9E-8F7D-3C5B9E2A1F6D}
 AppName=Phonodex
-AppVersion=1.0
+AppVersion=1.1
 AppPublisher=Your Name
 DefaultDirName={autopf}\Phonodex
 DefaultGroupName=Phonodex
 UninstallDisplayIcon={app}\Phonodex.exe
 OutputDir=installer
-OutputBaseFilename=Phonodex-Setup-v1
+OutputBaseFilename=Phonodex-Setup-v1.1
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
