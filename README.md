@@ -114,7 +114,7 @@ You can customize this format using the following placeholders:
 1. Launch the application
 2. Add your Discogs API token in the top input field, and click SAVE
 
-![image](assets/APIKey.png)
+![image](assets/apikey.png)
 
 3. Load files either by:
    - Clicking the "FILES" button to select individual files
