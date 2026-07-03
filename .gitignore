@@ -36,3 +36,6 @@ phonodex_log.txt
 .idea/
 .DS_Store
 Thumbs.db
+
+# Marketing website (separate project, deployed via Cloudflare/Wrangler)
+website/

@@ -1,6 +1,6 @@
 # Phonodex - Music Metadata Manager (with Automatic Metadata Fetching)
 
-![image](assets/full.png)
+![image](assets/main.png)
 
 Currently compatible with **Windows only** (due to clipboard operations).
 
@@ -114,7 +114,7 @@ You can customize this format using the following placeholders:
 1. Launch the application
 2. Add your Discogs API token in the top input field, and click SAVE
 
-![image](assets/apikey.png)
+![image](assets/APIKey.png)
 
 3. Load files either by:
    - Clicking the "FILES" button to select individual files
