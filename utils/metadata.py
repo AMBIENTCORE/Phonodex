@@ -9,7 +9,7 @@ from mutagen.flac import FLAC, Picture
 from mutagen.mp4 import MP4, MP4Cover
 from mutagen.oggvorbis import OggVorbis
 from mutagen.asf import ASF
-from mutagen.id3 import ID3, APIC, TPE1, TIT2, TALB, TPE2, TXXX, TDRC, TRCK, TCON
+from mutagen.id3 import ID3, APIC, TPE1, TIT2, TALB, TPE2, TXXX, TDRC, TRCK, TCON, COMM
 from utils.logging import log_message
 import requests
 from collections import Counter
@@ -41,7 +41,8 @@ def get_tag_value(audio, tag_name, default=""):
                 "catalognumber": "TXXX:CATALOGNUMBER",
                 "date": "TDRC",  # Year/Date
                 "tracknumber": "TRCK",  # Track number
-                "genre": "TCON"  # Genre
+                "genre": "TCON",  # Genre
+                "comment": "COMM"  # Comment (COMM frame -- has lang/desc)
             }
             mapped_tag = id3_mapping.get(tag_name)
             
@@ -54,6 +55,15 @@ def get_tag_value(audio, tag_name, default=""):
                 for tag in audio.tags.getall("TXXX"):
                     if tag.desc == desc:
                         return str(tag.text[0])
+            # Handle COMM (comment) frames specially: they carry lang + desc.
+            # Prefer the frame with empty desc (main comment); fall back to first.
+            elif mapped_tag == "COMM":
+                comm_frames = audio.tags.getall("COMM")
+                for tag in comm_frames:
+                    if tag.desc == "":
+                        return str(tag.text[0])
+                if comm_frames:
+                    return str(comm_frames[0].text[0])
             # Handle regular ID3 frames
             elif mapped_tag in audio.tags:
                 return str(audio.tags[mapped_tag].text[0])
@@ -65,7 +75,8 @@ def get_tag_value(audio, tag_name, default=""):
             flac_mapping = {
                 "date": "date",
                 "tracknumber": "tracknumber",
-                "genre": "genre"
+                "genre": "genre",
+                "comment": "comment"
             }
             mapped_tag = flac_mapping.get(tag_name, tag_name)
             return audio.get(mapped_tag, [default])[0]
@@ -79,7 +90,8 @@ def get_tag_value(audio, tag_name, default=""):
                 "catalognumber": "----:com.apple.iTunes:CATALOGNUMBER",
                 "date": "©day",
                 "tracknumber": "trkn",
-                "genre": "©gen"
+                "genre": "©gen",
+                "comment": "©cmt"
             }
             mapped_tag = mp4_mapping.get(tag_name)
             if mapped_tag and mapped_tag in audio:
@@ -103,7 +115,8 @@ def get_tag_value(audio, tag_name, default=""):
             ogg_mapping = {
                 "date": "date",
                 "tracknumber": "tracknumber",
-                "genre": "genre"
+                "genre": "genre",
+                "comment": "comment"
             }
             mapped_tag = ogg_mapping.get(tag_name, tag_name)
             return audio.get(mapped_tag, [default])[0]
@@ -117,7 +130,8 @@ def get_tag_value(audio, tag_name, default=""):
                 "catalognumber": "WM/CatalogNo",
                 "date": "WM/Year",
                 "tracknumber": "WM/TrackNumber",
-                "genre": "WM/Genre"
+                "genre": "WM/Genre",
+                "comment": "WM/Comment"
             }
             mapped_tag = asf_mapping.get(tag_name)
             if mapped_tag and mapped_tag in audio:
@@ -145,7 +159,8 @@ def set_tag_value(audio, tag_name, value):
                 "catalognumber": "----:com.apple.iTunes:CATALOGNUMBER",
                 "date": "©day",  # Year/date
                 "tracknumber": "trkn",  # Track number
-                "genre": "©gen"  # Genre
+                "genre": "©gen",  # Genre
+                "comment": "©cmt"  # Comment
             }
             mapped_tag = mp4_mapping.get(tag_name)
             if mapped_tag:
@@ -181,7 +196,8 @@ def set_tag_value(audio, tag_name, value):
                 "catalognumber": "WM/CatalogNo",
                 "date": "WM/Year",  # Year/date
                 "tracknumber": "WM/TrackNumber",  # Track number
-                "genre": "WM/Genre"  # Genre
+                "genre": "WM/Genre",  # Genre
+                "comment": "WM/Comment"  # Comment
             }
             mapped_tag = asf_mapping.get(tag_name)
             if mapped_tag:
@@ -196,7 +212,8 @@ def set_tag_value(audio, tag_name, value):
                 "catalognumber": (TXXX, lambda v: TXXX(encoding=3, desc="CATALOGNUMBER", text=[v])),
                 "date": (TDRC, lambda v: TDRC(encoding=3, text=[v])),
                 "tracknumber": (TRCK, lambda v: TRCK(encoding=3, text=[v])),
-                "genre": (TCON, lambda v: TCON(encoding=3, text=[v]))
+                "genre": (TCON, lambda v: TCON(encoding=3, text=[v])),
+                "comment": (COMM, lambda v: COMM(encoding=3, lang='eng', desc='', text=[v]))
             }
             if tag_name in id3_mapping:
                 frame_class, frame_creator = id3_mapping[tag_name]
@@ -209,6 +226,9 @@ def set_tag_value(audio, tag_name, value):
                     for tag in list(audio.tags.getall("TXXX")):
                         if tag.desc == "CATALOGNUMBER":
                             audio.tags.delall("TXXX:" + tag.desc)
+                elif tag_name == "comment":
+                    # COMM frames key includes lang/desc; delall clears all of them
+                    audio.tags.delall("COMM")
                 else:
                     # Regular ID3 frames
                     frame_name = frame_class.__name__
@@ -996,6 +1016,8 @@ def update_tag_by_column(file_path, column_num, new_value, audio_file=None, colu
             5: "date",
             6: "tracknumber",
             7: "genre",
+            # 8 is File Path (hidden, not editable)
+            9: "comment",
         }
     
     # Default callbacks

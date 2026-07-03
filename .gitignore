@@ -1,17 +1,34 @@
 # Python
 *.pyc
-__pycache__/
 *.pyo
 *.pyd
+__pycache__/
+*.egg-info/
 
-# PyInstaller build output
+# Virtualenvs
+.venv/
+venv/
+env/
+
+# Test / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# PyInstaller build output (but keep Phonodex.spec -- it's the build config)
 build/
 dist/
 *.spec
+!Phonodex.spec
+
+# Installer output (belongs on GitHub Releases, not in the repo)
+installer/*.exe
+installer/*.zip
 
 # Runtime / user data (never commit)
 api_key.txt
 folder_format_settings.json
+*.log
 phonodex_log.txt
 
 # Editor / OS

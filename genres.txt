@@ -1,0 +1,210 @@
+# Phonodex genre dictionary
+# One genre per line. Lines starting with '#' are comments and are ignored.
+# Blank lines are ignored. Case is preserved from this file when a
+# completion is offered, so 'Deep House' typed as 'deep h' will complete
+# to 'Deep House'.
+
+# Example entries (delete or replace with your own):
+# Ambient
+# Techno
+# House
+# Deep House
+# Jazz
+
+# Added by folder scan on 2026-07-02 18:01
+Abstract Hip Hop
+Acid
+Acid Jazz
+Acid Techno
+Acoustic Rock
+Afro
+Afro Funk
+Afropiano
+Alternative Dance
+Alternative Metal
+Alternative Pop
+Alternative R&B
+Alternative Rock
+Ambient
+Ambient Plugg
+Ambient Pop
+Ambient Techno
+Aquacrunk
+Art Pop
+Art Rock
+Atmospheric Drum & Bass
+Avant-Garde Jazz
+Balearic Beat
+Bass
+Beatbox
+Bedroom Pop
+Bolero
+Boom Bap
+Bossa Nova
+Brazilian Funk
+Breakbeat
+Breakcore
+Britpop
+Broken Beat
+Broken Transmission
+Chamber Jazz
+Chillout
+Chillstep
+Classical
+Cloud Rap
+Comedy Rap
+Comfy Synth
+Conscious Hip Hop
+Contemporary R&B
+Country
+Crossbreed
+Cybergrind
+Dancefloor Drum & Bass
+Dancehall
+Dark Jazz
+Darkstep
+Deconstructed Club
+Deep House
+Downtempo
+Dream Pop
+Drum & Bass
+Drumfunk
+Drumstep
+Dub
+Dub Techno
+Dubstep
+Dungeon Sound
+Dungeon Synth
+Electro
+Electro House
+Electroclash
+Electronica
+Electropop
+Experimental Hip Hop
+Footwork
+French Electro
+French House
+Frenchcore
+Full On Psytrance
+Funk
+Funk Rock
+Future Bass
+Future Garage
+Future Jazz
+Gabber
+Garage
+Glitch Hop
+Grime
+Grunge
+Halftime
+Hard Bop
+Hard Rock
+Hard Techno
+Hard Trance
+Hardcore
+Hardgroove Techno
+Hardstyle
+Heavy Metal
+Hip Hop
+Hip Hop Tuga
+Horrorcore
+House
+Hybrid Trap
+Hypnotic Techno
+IDM
+Indie Folk
+Indie Pop
+Indie Rock
+Indietronica
+Industrial Metal
+Industrial Rock
+Industrial Techno
+Instrumental Hip Hop
+Intro
+Jazz
+Jazz Fusion
+Jazz Rap
+Juke
+Jump-up Drum & Bass
+Jumpstyle
+Jungle
+Kizomba
+Krautrock
+Liquid Drum & Bass
+Lo-Fi Hip Hop
+Mathcore
+Metal
+Microhouse
+Minimal Drum & Bass
+Minimal Techno
+Modern Classical
+MPB
+Neo Soul
+Neo-Psychedelia
+Neue Deutsche Härte
+Neurofunk
+New Rave
+New Wave
+Nu Jaz
+Nu Jazz
+Nu Metal
+Nu Style Gabber
+Offbeat Techno
+Plugg
+Pop Rap
+Pop Rock
+Pop Soul
+Post Bop
+Post Britpop
+Post Dubstep
+Post Minimalism
+Post Rock
+Progressive Breaks
+Progressive House
+Psybient
+Psychedelic Folk
+Psychedelic Rock
+Psytrance
+Punk Rock
+Purple Sound
+Rap Rock
+Reggae
+Reggaeton
+Rock
+Samba
+Shoegaze
+Skullstep
+Slacker Rock
+Smooth Jazz
+Soft Rock
+Sophisti-Pop
+Soul
+Space Disco
+Speed Metal
+Speedcore
+Spoken Word
+Swing
+Symphonic Metal
+Symphonic Rock
+Synth Punk
+Synthpop
+Synthwave
+Tech House
+Techno
+Technoid
+Techstep
+Trance
+Trap
+Trash Metal
+Tribal
+Trip Hop
+UK Bass
+UK Garage
+UK Hip Hop
+Utopian Virtual
+Vapornoise
+Vaportrap
+Vaporwave
+Vocal Jazz
+Weightless
+Wonky

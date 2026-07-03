@@ -1,4 +1,11 @@
 [Setup]
+; AppId uniquely identifies THIS application to Windows. Never change it
+; between versions -- it's what tells Inno Setup "this new installer is
+; an upgrade of the existing install" rather than a separate application.
+; Changing this GUID after v1.0 ships would leave users with two
+; parallel installs and no upgrade path. Generate a fresh GUID only if
+; you're forking to create a genuinely different application.
+AppId={{A8F3E2D1-6B4C-4A9E-8F7D-3C5B9E2A1F6D}
 AppName=Phonodex
 AppVersion=1.0
 AppPublisher=Your Name

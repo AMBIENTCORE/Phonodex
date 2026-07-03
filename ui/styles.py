@@ -134,30 +134,61 @@ def configure_styles(style, custom_font):
     style.configure('TText', padding=Config.STYLES["WIDGET_PADDING"], 
                    background=Config.COLORS["SECONDARY_BACKGROUND"], foreground=Config.COLORS["TEXT"])
     
-    # Table styles with dark theme
+    # Table styles with dark theme.
+    # NOTE: on the 'clam' theme, borders are drawn using lightcolor + darkcolor
+    # (the 3D relief colors), NOT bordercolor. Setting all three to the same
+    # value forces a flat, single-color border that actually renders.
     style.configure('Treeview', 
                    rowheight=15,
                    font=('Consolas', Config.FONTS["TABLE_SIZE"]),
                    background=Config.COLORS["SECONDARY_BACKGROUND"],
                    foreground=Config.COLORS["TEXT"],
-                   fieldbackground=Config.COLORS["SECONDARY_BACKGROUND"])
+                   fieldbackground=Config.COLORS["SECONDARY_BACKGROUND"],
+                   bordercolor=Config.COLORS["BORDER"],
+                   lightcolor=Config.COLORS["BORDER"],
+                   darkcolor=Config.COLORS["BORDER"],
+                   borderwidth=1,
+                   relief='solid')
     style.configure('Treeview.Heading', 
                    font=('Consolas', Config.FONTS["TABLE_HEADING_SIZE"], 'bold'),
                    background=Config.COLORS["BACKGROUND"],
-                   foreground=Config.COLORS["TEXT"])
+                   foreground=Config.COLORS["TEXT"],
+                   bordercolor=Config.COLORS["BORDER"],
+                   lightcolor=Config.COLORS["BORDER"],
+                   darkcolor=Config.COLORS["BORDER"],
+                   borderwidth=1,
+                   relief='solid',
+                   padding=(4, 3))
+    style.map('Treeview.Heading',
+              background=[('active', Config.COLORS["SECONDARY_BACKGROUND"])],
+              bordercolor=[('!disabled', Config.COLORS["BORDER"])],
+              lightcolor=[('!disabled', Config.COLORS["BORDER"])],
+              darkcolor=[('!disabled', Config.COLORS["BORDER"])])
 
-    # Configure table borders and remove extra spacing
-    style.layout("Treeview", [
-        ('Treeview.treearea', {'sticky': 'nswe'})
-    ])
-    
-    style.layout("Treeview.Heading", [
-        ("Treeview.Heading.cell", {'sticky': 'nswe'}),
-        ("Treeview.Heading.padding", {'sticky': 'nswe', 'children': [
-            ("Treeview.Heading.image", {'side': 'right', 'sticky': ''}),
-            ("Treeview.Heading.text", {'sticky': 'we'})
-        ]})
-    ])
+    # Note: DO NOT override style.layout("Treeview", ...) or
+    # style.layout("Treeview.Heading", ...) here. The default clam layouts
+    # include a "border" sub-element that is what actually draws the
+    # bordercolor/lightcolor/darkcolor. Stripping it (as an earlier version
+    # of this file did) makes the border configuration invisible.
+
+    # Scrollbar styling (clam) -- flat, dark, matches the palette.
+    # Configuring the base 'TScrollbar' cascades to both Vertical.* and
+    # Horizontal.* orient-specific variants used by ttk.Scrollbar.
+    style.configure('TScrollbar',
+                   background=Config.COLORS["BORDER"],           # thumb color
+                   troughcolor=Config.COLORS["BACKGROUND"],       # track color
+                   bordercolor=Config.COLORS["BACKGROUND"],
+                   lightcolor=Config.COLORS["BORDER"],
+                   darkcolor=Config.COLORS["BORDER"],
+                   arrowcolor=Config.COLORS["SECONDARY_TEXT"],
+                   arrowsize=12,
+                   relief='flat',
+                   borderwidth=0)
+    style.map('TScrollbar',
+              background=[('active', Config.COLORS["SECONDARY_TEXT"]),
+                          ('pressed', Config.COLORS["TEXT"])],
+              arrowcolor=[('active', Config.COLORS["TEXT"]),
+                          ('disabled', Config.COLORS["BORDER"])])
 
     # Left panel styles with dark theme
     style.configure('LeftPanel.TFrame', background=Config.COLORS["BACKGROUND"])
@@ -230,7 +261,10 @@ def configure_table_columns(table, columns, column_widths, hide_columns=None):
     """
     hide_columns = hide_columns or []
     for col in columns:
-        table.column(col, anchor="center", width=column_widths.get(col, 100))
+        # stretch=False so columns keep their explicit widths instead of
+        # squeezing to fit the treeview -- required for horizontal scrolling
+        # to become meaningful when the total column width exceeds the view.
+        table.column(col, anchor="center", width=column_widths.get(col, 100), stretch=False)
         
         # Hide specified columns
         if col in hide_columns:

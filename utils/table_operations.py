@@ -39,8 +39,53 @@ def auto_adjust_column_widths(file_table, columns):
     column_widths["Album"] = min(180, column_widths["Album"])                # Maximum 180 pixels
     column_widths["Album Artist"] = min(180, column_widths["Album Artist"])  # Maximum 180 pixels
     column_widths["Genre"] = min(160, column_widths["Genre"])                # Maximum 160 pixels
+    if "Comment" in column_widths:
+        column_widths["Comment"] = min(400, max(150, column_widths["Comment"]))  # 150-400 pixels
     column_widths["File Path"] = 0  # Always keep File Path column hidden
-    
+
+    # ------------------------------------------------------------------
+    # If the total content-based width is smaller than the visible table
+    # area, expand the flexible text columns (left-to-right, proportional
+    # to their current widths) until the columns fill the full width. This
+    # avoids the ugly empty band on the right when the file list is short
+    # or the window is wide. If the content already exceeds the visible
+    # width, do nothing and let the horizontal scrollbar handle it.
+    # ------------------------------------------------------------------
+    try:
+        file_table.update_idletasks()
+        visible_width = file_table.winfo_width()
+    except Exception:
+        visible_width = 0
+
+    # Only apply once the widget has a real geometry (avoids running before
+    # the window is realized, when winfo_width() returns 1).
+    if visible_width > 50:
+        displayed = file_table.cget("displaycolumns")
+        # displaycolumns can be the string "#all", a tuple, or an empty string.
+        if not displayed or displayed == "#all":
+            visible_cols = list(columns)
+        else:
+            visible_cols = list(displayed)
+
+        # Columns eligible to absorb leftover space, in left-to-right order.
+        FLEX_COLS = ("Artist", "Title", "Album", "Album Artist", "Genre", "Comment")
+        flex_cols = [c for c in visible_cols if c in FLEX_COLS]
+
+        current_total = sum(column_widths[c] for c in visible_cols if c in column_widths)
+        slack = visible_width - current_total
+        if slack > 0 and flex_cols:
+            flex_total = sum(column_widths[c] for c in flex_cols) or 1
+            distributed = 0
+            for i, c in enumerate(flex_cols):
+                if i == len(flex_cols) - 1:
+                    # Give any rounding remainder to the last flex column so
+                    # the sum lands exactly on visible_width.
+                    column_widths[c] += slack - distributed
+                else:
+                    share = int(slack * column_widths[c] / flex_total)
+                    column_widths[c] += share
+                    distributed += share
+
     # Apply the calculated widths
     for col in columns:
         file_table.column(col, width=column_widths[col])
@@ -212,7 +257,8 @@ def apply_filter(file_table, filter_text, file_list, file_metadata_cache, get_au
                     "catalognumber": get_tag_value(audio, "catalognumber"),
                     "date": get_tag_value(audio, "date"),
                     "tracknumber": get_tag_value(audio, "tracknumber"),
-                    "genre": get_tag_value(audio, "genre")
+                    "genre": get_tag_value(audio, "genre"),
+                    "comment": get_tag_value(audio, "comment")
                 }
         
         metadata = file_metadata_cache.get(file_path)
@@ -227,7 +273,8 @@ def apply_filter(file_table, filter_text, file_list, file_metadata_cache, get_au
                 metadata.get("date", ""),
                 metadata.get("tracknumber", ""),
                 metadata.get("genre", ""),
-                file_path  # Add file_path as the last value
+                file_path,  # File path stays at index 8 (hidden column)
+                metadata.get("comment", "")  # Comment is rightmost visible column
             ]
             
             # Check if any value matches the filter (case-insensitive)
@@ -253,7 +300,7 @@ def apply_filter(file_table, filter_text, file_list, file_metadata_cache, get_au
         else:
             # Only show error items if they match the filter or if there's no filter
             if not filter_text or "error" in filter_text.lower():
-                item = file_table.insert("", "end", values=["Error", "", "", "", "", "", "", "", ""])
+                item = file_table.insert("", "end", values=["Error", "", "", "", "", "", "", "", "", ""])
                 file_table.tag_configure("failed", background=Config.COLORS["FAILED_ROW"])
                 file_table.item(item, tags=("failed",))
     

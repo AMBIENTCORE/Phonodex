@@ -230,7 +230,7 @@ main_paned.add(right_panel, weight=1)  # Set weight to 1 to allow expansion
 
 # Buttons directly in left panel
 buttons_subframe = ttk.Frame(left_panel)
-buttons_subframe.pack(fill="x", pady=(15, 5), padx=10)
+buttons_subframe.pack(fill="x", pady=(10, 0), padx=10)
 
 for button_text, command in [
     ("FILES", lambda: file_ops_select_files(
@@ -238,10 +238,10 @@ for button_text, command in [
         Config.SUPPORTED_AUDIO_EXTENSIONS, 
         file_list_var=file_list, 
         count_var=file_count_var, 
-        update_table_func=update_table
+        update_table_func=_import_files_with_progress
     )),
     ("FOLDER", lambda: file_ops_select_folder(
-        update_table_func=update_table,
+        update_table_func=_import_files_with_progress,
         file_list_var=file_list,
         metadata_cache=file_metadata_cache,
         processed_files=processed_files,
@@ -262,7 +262,7 @@ for button_text, command in [
 
 # API Key Entry with Save Button - directly in left panel
 api_subframe = ttk.Frame(left_panel)
-api_subframe.pack(fill="x", pady=(5, 5), padx=10)
+api_subframe.pack(fill="x", pady=(5, 0), padx=10)
 
 api_entry = create_styled_entry(
     api_subframe,
@@ -286,9 +286,78 @@ save_button = tk.Button(api_subframe, text="💾",
 style_button(save_button)
 save_button.pack(side="left", padx=(Config.PADDING["SMALL"], 0))
 
+# ---------------------------------------------------------------------------
+# Batch operations: PROCESS / EXPORT (paired) + save-option checkboxes + STOP.
+# Previously lived in a column on the right side of the app; moved here so
+# all interactive controls sit in the left panel. Command lookups are all
+# wrapped in lambdas because the underlying functions are defined later in
+# this file (name resolution happens on click, not at button creation).
+# ---------------------------------------------------------------------------
+process_export_subframe = ttk.Frame(left_panel)
+process_export_subframe.pack(fill="x", pady=(5, 0), padx=10)
+create_button_pair(
+    process_export_subframe,
+    "PROCESS", lambda: start_processing(),
+    "EXPORT", lambda: organize_to_collection(),
+)
+
+# Save-metadata option toggles that gate what EXPORT (organize_to_collection)
+# writes: cover art, year, catalog number. Rendered as flat pixel-font
+# toggle buttons (indicatoron=False) instead of default tk.Checkbutton
+# widgets -- the OS checkbox chrome clashed with the sidepane aesthetic.
+# fg is swapped between TEXT (on) and SECONDARY_TEXT (off) so the state
+# reads clearly on dark backgrounds where raised/sunken relief is subtle.
+checkbox_subframe = ttk.Frame(left_panel)
+checkbox_subframe.pack(fill="x", pady=(3, 0), padx=10)
+
+_write_label = tk.Label(checkbox_subframe, text="WRITE:", anchor="w")
+style_label(_write_label, use_smaller_font=True)
+_write_label.pack(side="left", padx=(0, 4))
+
+
+def _apply_toggle_visual(btn, var):
+    """Brighten the button text when its BooleanVar is True, dim it otherwise."""
+    btn.configure(fg=Config.COLORS["TEXT"] if var.get() else Config.COLORS["SECONDARY_TEXT"])
+
+
+for _cb_text, _cb_var in (
+    ("ART", save_art_var),
+    ("YEAR", save_year_var),
+    ("CATALOG", save_catalog_var),
+):
+    _cb = tk.Checkbutton(
+        checkbox_subframe,
+        text=_cb_text,
+        variable=_cb_var,
+        indicatoron=False,
+        font=custom_font,
+        bg=Config.COLORS["BACKGROUND"],
+        fg=Config.COLORS["SECONDARY_TEXT"],
+        selectcolor=Config.COLORS["SECONDARY_BACKGROUND"],
+        activebackground=Config.COLORS["SECONDARY_BACKGROUND"],
+        activeforeground=Config.COLORS["TEXT"],
+        borderwidth=1,
+        relief="solid",
+        padx=6,
+        pady=2,
+    )
+    # Bind the visual refresh to the button's own click callback. Late-bound
+    # b/v defaults capture the current iteration's widget + var.
+    _cb.configure(command=lambda b=_cb, v=_cb_var: _apply_toggle_visual(b, v))
+    _apply_toggle_visual(_cb, _cb_var)  # initial dim/bright state
+    _cb.pack(side="left", fill="x", expand=True, padx=1)
+
+stop_button = create_styled_button(
+    left_panel, "STOP", lambda: stop_processing_files(), is_danger=True
+)
+stop_button.pack(fill="x", padx=10, pady=(3, 0))
+
 # Basic Fields Section (Now as a direct child of left_panel)
 basic_fields_subframe = ttk.Frame(left_panel, style='TFrame', borderwidth=0)
-basic_fields_subframe.pack(fill="x", pady=(5, 5), padx=10)
+# Extra top gap (15 instead of the standard 5) to visually separate the
+# metadata editor from the batch-action buttons above it -- they're
+# semantically different sections.
+basic_fields_subframe.pack(fill="x", pady=(15, 0), padx=10)
 
 # Create variables for the fields
 basic_field_vars = {
@@ -299,13 +368,20 @@ basic_field_vars = {
     "Catalog Number": StringVar(),
     "Year": StringVar(),
     "Track": StringVar(),
-    "Genre": StringVar()
+    "Genre": StringVar(),
+    "Comment": StringVar()
 }
 
 # Create text boxes for basic fields - use the original field names for variable lookup
-for field in ["Artist", "Title", "Album", "Album Artist", "Catalog Number", "Year", "Track", "Genre"]:
+# Also capture the Genre entry so we can attach ghost-text autocomplete to it below.
+genre_entry = None
+for field in ["Artist", "Title", "Album", "Album Artist", "Catalog Number", "Year", "Track", "Genre", "Comment"]:
     field_frame = ttk.Frame(basic_fields_subframe, style='TFrame', borderwidth=0)
-    field_frame.pack(fill="x", padx=5, pady=2)
+    # padx=0 so the entry fills the sidepane's full width (the parent
+    # basic_fields_subframe already provides padx=10 -- matches buttons).
+    # pady=(4, 0) gives each row a bit more breathing room so labels
+    # don't visually collide with the entry above.
+    field_frame.pack(fill="x", padx=0, pady=(4, 0))
     
     # Get the current custom font details to create a smaller version
     current_size = custom_font.cget("size")
@@ -320,9 +396,697 @@ for field in ["Artist", "Title", "Album", "Album Artist", "Catalog Number", "Yea
     entry = create_styled_entry(field_frame, textvariable=basic_field_vars[field])
     entry.pack(fill="x", pady=(2, 0))
 
+    if field == "Genre":
+        genre_entry = entry
+
+# ---------------------------------------------------------------------------
+# Genre ghost-text autocomplete
+# ---------------------------------------------------------------------------
+# Reads the user's genre dictionary (Config.GENRES_FILE) and suggests the
+# alphabetically-first case-insensitive prefix match as inline "ghost text"
+# (inserted after the cursor and selected, so any keystroke replaces it and
+# Tab/Right accepts it). Multiple genres per field are separated by ';' --
+# only the segment after the last ';' is used as the prefix, so autocomplete
+# starts fresh after each separator.
+from utils.genres import (
+    load_genres as _load_genres,
+    find_completion as _find_completion,
+    find_all_completions as _find_all_completions,
+    find_prefix_completions as _find_prefix_completions,
+    scan_folder_for_genres as _scan_folder_for_genres,
+    merge_genres_into_file as _merge_genres_into_file,
+)
+
+_genre_dictionary = _load_genres()
+if _genre_dictionary:
+    log_message(f"[INFO] Loaded {len(_genre_dictionary)} genres from {Config.GENRES_FILE}", log_type="debug")
+else:
+    log_message(f"[INFO] Genre dictionary is empty. Edit {Config.GENRES_FILE} to add genres.", log_type="debug")
+
+# Skip these keys when computing suggestions -- they're navigation / modifiers,
+# not text input, so they must not trigger a fresh ghost. BackSpace and Delete
+# are intentionally NOT here -- we handle them below to refresh the dropdown
+# without inserting a new ghost (that would fight the user's deletion).
+_GENRE_SKIP_KEYSYMS = {
+    "Tab", "Return", "Escape", "Up", "Down", "Left", "Right", "Home", "End",
+    "Prior", "Next", "Insert",
+    "Shift_L", "Shift_R", "Control_L", "Control_R", "Alt_L", "Alt_R",
+    "Meta_L", "Meta_R", "Caps_Lock", "Num_Lock", "Scroll_Lock",
+    "F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8", "F9", "F10", "F11", "F12",
+}
+
+# Track whether the currently displayed selection is an unaccepted ghost
+# (as opposed to a user's manual text selection). This lets us safely strip
+# the ghost on FocusOut / Escape without clobbering a real selection.
+_genre_ghost_active = False
+
+# Dropdown listing all matches for the current prefix. Lazily created.
+_genre_dropdown = None
+_genre_dropdown_listbox = None
+_genre_dropdown_visible = False
+
+
+def _segment_start_index(text, cursor):
+    """Index where the current genre segment begins: just past the last ';'
+    before `cursor`, then skipping any leading whitespace."""
+    sep = text.rfind(";", 0, cursor)
+    start = sep + 1 if sep >= 0 else 0
+    while start < cursor and text[start].isspace():
+        start += 1
+    return start
+
+
+def _genre_current_prefix(text):
+    """Return the segment being edited (text after the last ';'), left-stripped."""
+    sep = text.rfind(";")
+    return (text[sep + 1:] if sep >= 0 else text).lstrip()
+
+
+def _create_genre_dropdown():
+    """Create the dropdown Toplevel + Listbox lazily on first use."""
+    global _genre_dropdown, _genre_dropdown_listbox
+    if _genre_dropdown is not None:
+        return
+    _genre_dropdown = tk.Toplevel(app)
+    _genre_dropdown.wm_overrideredirect(True)
+    # Topmost keeps the dropdown above the main window without needing to
+    # call .lift() on every keystroke (which can nudge focus on Windows
+    # and cause the entry's <FocusOut> handler to hide us mid-typing).
+    try:
+        _genre_dropdown.wm_attributes("-topmost", True)
+    except Exception:
+        pass
+    _genre_dropdown.withdraw()
+    _genre_dropdown.configure(bg=Config.COLORS["BORDER"])
+    # Match the sidepane entry font exactly: ('Consolas', TABLE_SIZE).
+    entry_font = ("Consolas", Config.FONTS["TABLE_SIZE"])
+    lb = tk.Listbox(
+        _genre_dropdown,
+        bg=Config.COLORS["SECONDARY_BACKGROUND"],
+        fg=Config.COLORS["TEXT"],
+        selectbackground=Config.COLORS["BORDER"],
+        selectforeground=Config.COLORS["TEXT"],
+        activestyle="none",
+        highlightthickness=0,
+        borderwidth=0,
+        relief="flat",
+        exportselection=False,
+        font=entry_font,
+    )
+    lb.pack(fill="both", expand=True, padx=1, pady=1)
+    lb.bind("<ButtonPress-1>", _on_dropdown_click)
+    lb.bind("<Motion>", _on_dropdown_motion)
+    _genre_dropdown_listbox = lb
+
+
+def _show_dropdown(matches, update_ghost_from=None):
+    """Populate and show the dropdown below the Genre entry.
+
+    Args:
+        matches: List of full dictionary genre strings to show.
+        update_ghost_from: If given, highlight this specific match.
+    """
+    global _genre_dropdown_visible
+    if not matches or genre_entry is None:
+        _hide_dropdown()
+        return
+    _create_genre_dropdown()
+    lb = _genre_dropdown_listbox
+    lb.delete(0, "end")
+    for m in matches:
+        lb.insert("end", m)
+    highlight_idx = 0
+    if update_ghost_from is not None:
+        try:
+            highlight_idx = matches.index(update_ghost_from)
+        except ValueError:
+            highlight_idx = 0
+    lb.selection_clear(0, "end")
+    lb.selection_set(highlight_idx)
+    lb.activate(highlight_idx)
+    lb.see(highlight_idx)
+    lb.configure(height=min(len(matches), 8))
+
+    genre_entry.update_idletasks()
+    x = genre_entry.winfo_rootx()
+    y = genre_entry.winfo_rooty() + genre_entry.winfo_height()
+    w = genre_entry.winfo_width()
+    _genre_dropdown.update_idletasks()
+    h = lb.winfo_reqheight() + 2  # +2 for the 1px border padding
+    _genre_dropdown.wm_geometry(f"{w}x{h}+{x}+{y}")
+    # Re-apply topmost on every show -- some window managers drop it after
+    # a geometry change. Then deiconify unconditionally (no-op if already
+    # visible) so a stray withdraw() elsewhere can't leave us hidden.
+    try:
+        _genre_dropdown.wm_attributes("-topmost", True)
+    except Exception:
+        pass
+    _genre_dropdown.deiconify()
+    _genre_dropdown_visible = True
+
+
+def _hide_dropdown():
+    global _genre_dropdown_visible
+    if _genre_dropdown is not None:
+        _genre_dropdown.withdraw()
+    _genre_dropdown_visible = False
+
+
+def _apply_ghost(match):
+    """Replace the current segment with `match` (dictionary case), select
+    the tail beyond what the user actually typed, and place the cursor at
+    the boundary. Sets _genre_ghost_active True.
+
+    If `match` is exactly the user's typed prefix (case-insensitively),
+    just normalize the casing to the dictionary's -- no selection, no
+    ghost. The dropdown will still show the match as confirmation.
+    """
+    global _genre_ghost_active
+    if genre_entry is None:
+        return
+    text = genre_entry.get()
+    cursor = genre_entry.index("insert")
+    seg_start = _segment_start_index(text, cursor)
+    typed_len = cursor - seg_start
+    if typed_len < 0 or not match.lower().startswith(text[seg_start:cursor].lower()):
+        return
+    # Replace the whole segment (typed prefix + any existing ghost tail)
+    # with the full match so the dictionary's casing wins.
+    end_index = len(text)
+    genre_entry.delete(seg_start, end_index)
+    genre_entry.insert(seg_start, match)
+    boundary = seg_start + typed_len
+    if boundary < seg_start + len(match):
+        # There's a tail to select as ghost.
+        genre_entry.selection_range(boundary, seg_start + len(match))
+        genre_entry.icursor(boundary)
+        _genre_ghost_active = True
+    else:
+        # Exact match -- casing was normalized, no ghost tail exists.
+        genre_entry.icursor(seg_start + len(match))
+        _genre_ghost_active = False
+
+
+def _on_genre_keyrelease(event):
+    global _genre_ghost_active
+    if not _genre_dictionary or genre_entry is None:
+        return
+    if event.keysym in _GENRE_SKIP_KEYSYMS:
+        return
+
+    text = genre_entry.get()
+    cursor = genre_entry.index("insert")
+    # Only operate when the cursor is at the end of the text and there is
+    # no user selection. Manual selections (drag / shift-arrow) live their
+    # own life and shouldn't be clobbered.
+    #
+    # Fast-typing race: when key presses overlap at the OS level, tk can
+    # deliver KeyPress A -> KeyPress B -> KeyRelease A -> KeyRelease B.
+    # By the time KeyRelease A runs and applies a ghost, KeyRelease B sees
+    # cursor-not-at-end + selection-present (the ghost tail just installed
+    # by A). In that case we must NOT hide the dropdown -- it's showing
+    # the correct current-state completions. Just skip re-computation.
+    if cursor != len(text) or genre_entry.selection_present():
+        return
+
+    seg_start = _segment_start_index(text, cursor)
+    prefix = text[seg_start:cursor]
+    if not prefix:
+        _hide_dropdown()
+        _genre_ghost_active = False
+        return
+
+    # Build the exclusion set: every OTHER `;`-separated segment already
+    # present in the entry (excluding the one currently being edited).
+    # This prevents the dropdown from suggesting a genre the user has
+    # already added earlier in the same field.
+    next_sep = text.find(";", cursor)
+    current_segment_raw = text[seg_start: next_sep if next_sep >= 0 else len(text)]
+    current_segment_stripped = current_segment_raw.strip()
+    exclude = set()
+    for seg in text.split(";"):
+        s = seg.strip()
+        if s and s != current_segment_stripped:
+            exclude.add(s)
+
+    matches = _find_all_completions(prefix, _genre_dictionary, exclude=exclude)
+    if not matches:
+        _hide_dropdown()
+        _genre_ghost_active = False
+        return
+
+    is_deletion = event.keysym in ("BackSpace", "Delete")
+    if is_deletion:
+        # User is undoing -- show the shortlist for browsing but don't
+        # re-insert a ghost (that would fight against the deletion and
+        # make backspace feel broken).
+        _genre_ghost_active = False
+        _show_dropdown(matches)
+    else:
+        # Ghost text only makes sense for PREFIX matches -- we can't
+        # ghost-complete "Ambient Techno" when the user typed "techno".
+        prefix_matches = _find_prefix_completions(prefix, _genre_dictionary, exclude=exclude)
+        if prefix_matches:
+            _apply_ghost(prefix_matches[0])
+            _show_dropdown(matches, update_ghost_from=prefix_matches[0])
+        else:
+            # Substring-only matches: show the dropdown for browsing but
+            # don't insert a ghost (there's nothing to complete-to).
+            _genre_ghost_active = False
+            _show_dropdown(matches)
+
+
+def _genre_accept_ghost():
+    """If a ghost is showing, accept it (clear selection, cursor to end). Returns True if accepted."""
+    global _genre_ghost_active
+    if _genre_ghost_active and genre_entry is not None and genre_entry.selection_present():
+        genre_entry.selection_clear()
+        genre_entry.icursor("end")
+        _genre_ghost_active = False
+        _hide_dropdown()
+        return True
+    return False
+
+
+def _genre_reject_ghost():
+    """If a ghost is showing, delete it. Returns True if rejected."""
+    global _genre_ghost_active
+    if _genre_ghost_active and genre_entry is not None and genre_entry.selection_present():
+        try:
+            first = genre_entry.index("sel.first")
+            last = genre_entry.index("sel.last")
+            genre_entry.delete(first, last)
+        except tk.TclError:
+            pass
+        _genre_ghost_active = False
+        return True
+    return False
+
+
+def _on_genre_tab(event):
+    if _genre_accept_ghost():
+        return "break"
+    return None
+
+
+def _on_genre_right(event):
+    if _genre_accept_ghost():
+        return "break"
+    return None
+
+
+def _on_genre_return(event):
+    # Accept the current ghost or the highlighted dropdown item.
+    if _genre_dropdown_visible and _genre_dropdown_listbox is not None:
+        sel = _genre_dropdown_listbox.curselection()
+        if sel:
+            _commit_match(_genre_dropdown_listbox.get(sel[0]))
+            return "break"
+    if _genre_accept_ghost():
+        return "break"
+    return None
+
+
+def _on_genre_escape(event):
+    hid = False
+    if _genre_dropdown_visible:
+        _hide_dropdown()
+        hid = True
+    if _genre_reject_ghost():
+        hid = True
+    return "break" if hid else None
+
+
+def _on_genre_up(event):
+    if not _genre_dropdown_visible or _genre_dropdown_listbox is None:
+        return None
+    lb = _genre_dropdown_listbox
+    sel = lb.curselection()
+    idx = sel[0] if sel else 0
+    idx = max(0, idx - 1)
+    lb.selection_clear(0, "end")
+    lb.selection_set(idx)
+    lb.activate(idx)
+    lb.see(idx)
+    _apply_ghost(lb.get(idx))
+    return "break"
+
+
+def _on_genre_down(event):
+    if not _genre_dropdown_visible or _genre_dropdown_listbox is None:
+        return None
+    lb = _genre_dropdown_listbox
+    sel = lb.curselection()
+    idx = sel[0] if sel else -1
+    idx = min(lb.size() - 1, idx + 1)
+    lb.selection_clear(0, "end")
+    lb.selection_set(idx)
+    lb.activate(idx)
+    lb.see(idx)
+    _apply_ghost(lb.get(idx))
+    return "break"
+
+
+def _commit_match(match):
+    """Replace the current genre segment with `match`, position cursor at
+    the end of it, clear any ghost state, and hide the dropdown. Used by
+    the dropdown click handler and Return-key acceptance from the
+    dropdown -- both need to handle exact-match items (where _apply_ghost
+    + _genre_accept_ghost would no-op because there is no selection).
+    """
+    global _genre_ghost_active
+    if genre_entry is None:
+        return
+    text = genre_entry.get()
+    cursor = genre_entry.index("insert")
+    seg_start = _segment_start_index(text, cursor)
+    next_sep = text.find(";", cursor)
+    seg_end = next_sep if next_sep >= 0 else len(text)
+    genre_entry.delete(seg_start, seg_end)
+    genre_entry.insert(seg_start, match)
+    genre_entry.icursor(seg_start + len(match))
+    try:
+        genre_entry.selection_clear()
+    except Exception:
+        pass
+    _genre_ghost_active = False
+    _hide_dropdown()
+
+
+def _on_dropdown_click(event):
+    """User clicked an item in the dropdown -- commit it as the chosen
+    completion for the current segment and dismiss the dropdown.
+
+    We deliberately do NOT route through _apply_ghost + _genre_accept_ghost
+    here: for exact-match items (e.g. clicking "Techno" after typing
+    "techno") _apply_ghost takes the no-ghost branch, and
+    _genre_accept_ghost then bails because there's no selection to accept.
+    The dropdown would stay open and the click would look like a no-op.
+    Committing directly avoids that whole class of edge cases.
+    """
+    if _genre_dropdown_listbox is None or genre_entry is None:
+        return None
+    idx = _genre_dropdown_listbox.nearest(event.y)
+    if idx < 0:
+        return None
+    match = _genre_dropdown_listbox.get(idx)
+    _commit_match(match)
+    genre_entry.focus_set()
+    return "break"
+
+
+def _on_dropdown_motion(event):
+    """Highlight the item under the mouse pointer for feedback."""
+    if _genre_dropdown_listbox is None:
+        return
+    idx = _genre_dropdown_listbox.nearest(event.y)
+    if idx < 0:
+        return
+    _genre_dropdown_listbox.selection_clear(0, "end")
+    _genre_dropdown_listbox.selection_set(idx)
+    _genre_dropdown_listbox.activate(idx)
+
+
+def _on_root_button1(event):
+    """Global click handler: hide the dropdown (and reject any pending
+    ghost) if the user clicks anywhere that isn't the Genre entry or the
+    dropdown listbox itself. This replaces the old <FocusOut> logic,
+    which fired spuriously during ghost text mutations and hid the
+    dropdown mid-typing.
+    """
+    if not _genre_dropdown_visible and not _genre_ghost_active:
+        return
+    w = event.widget
+    if w is genre_entry:
+        return
+    if w is _genre_dropdown_listbox:
+        return
+    # Walk up the widget's parent chain in case the click landed on a
+    # child of the dropdown Toplevel (border frame, etc.).
+    try:
+        parent = w
+        while parent is not None:
+            if parent is _genre_dropdown:
+                return
+            parent = parent.master
+    except Exception:
+        pass
+    _genre_reject_ghost()
+    _hide_dropdown()
+
+
+if genre_entry is not None:
+    genre_entry.bind("<KeyRelease>", _on_genre_keyrelease, add="+")
+    genre_entry.bind("<Tab>", _on_genre_tab, add="+")
+    genre_entry.bind("<Right>", _on_genre_right, add="+")
+    genre_entry.bind("<Return>", _on_genre_return, add="+")
+    genre_entry.bind("<Escape>", _on_genre_escape, add="+")
+    genre_entry.bind("<Up>", _on_genre_up, add="+")
+    genre_entry.bind("<Down>", _on_genre_down, add="+")
+    # NOTE: intentionally NOT binding <FocusOut>. Ghost-text mutations
+    # (delete + insert + selection_range inside _apply_ghost) can queue
+    # spurious FocusOut events on Windows that then hide the dropdown
+    # mid-typing. Click-outside handling via the app-wide <Button-1>
+    # binding below covers the real dismiss case.
+    app.bind_all("<Button-1>", _on_root_button1, add="+")
+
+
+def update_genre_dictionary_from_folder():
+    """Prompt for a folder, scan all audio files for genre tags in a background
+    thread (with a modal progress dialog so the app doesn't appear frozen), and
+    merge any new genres into Config.GENRES_FILE. Reloads the in-memory
+    dictionary so the ghost-text autocomplete picks up the additions immediately.
+    """
+    folder = filedialog.askdirectory(
+        title="Select a folder to scan for genres",
+        mustexist=True,
+    )
+    if not folder:
+        return
+
+    log_message(f"[INFO] Scanning '{folder}' for genre tags...", log_type="debug")
+
+    # --- Modal progress dialog ---------------------------------------------
+    dlg = tk.Toplevel(app)
+    dlg.title("Updating Genre Dictionary")
+    dlg.transient(app)
+    dlg.resizable(False, False)
+    dlg.configure(bg=Config.COLORS["BACKGROUND"])
+    # Block interaction with the main window until the scan finishes.
+    dlg.grab_set()
+    # Intercept the close (X) button -- we treat it as a cancel request.
+    cancel_flag = {"cancel": False}
+    def _on_close():
+        cancel_flag["cancel"] = True
+    dlg.protocol("WM_DELETE_WINDOW", _on_close)
+
+    # Font matching the table headers: bold Consolas at TABLE_HEADING_SIZE.
+    # Used for all labels in this dialog for visual consistency with the
+    # main window's tabular data.
+    dialog_font = ("Consolas", Config.FONTS["TABLE_HEADING_SIZE"], "bold")
+
+    header = tk.Label(
+        dlg,
+        text="Scanning folder for genre tags...",
+        bg=Config.COLORS["BACKGROUND"],
+        fg=Config.COLORS["TEXT"],
+        font=dialog_font,
+    )
+    header.pack(padx=20, pady=(15, 5))
+
+    folder_label = tk.Label(
+        dlg,
+        text=folder,
+        bg=Config.COLORS["BACKGROUND"],
+        fg=Config.COLORS["SECONDARY_TEXT"],
+        font=dialog_font,
+        wraplength=440,
+        justify="center",
+    )
+    folder_label.pack(padx=20, pady=(0, 10))
+
+    # Determinate mode: fills from left to right as files are scanned.
+    # We start in indeterminate mode as a fallback for the brief window
+    # between dialog show and the initial total-count callback firing;
+    # once the worker reports the total, _poll() switches it to
+    # determinate and stops the animation.
+    pb = ttk.Progressbar(dlg, mode="indeterminate", length=440, maximum=100)
+    pb.pack(padx=20, pady=5)
+    pb.start(12)
+
+    status_var = StringVar(value="Counting files...")
+    status_label = tk.Label(
+        dlg,
+        textvariable=status_var,
+        bg=Config.COLORS["BACKGROUND"],
+        fg=Config.COLORS["SECONDARY_TEXT"],
+        font=dialog_font,
+        width=60,
+        anchor="w",
+    )
+    status_label.pack(padx=20, pady=(5, 15))
+
+    # Center the dialog over the main window.
+    dlg.update_idletasks()
+    try:
+        px = app.winfo_rootx() + (app.winfo_width() - dlg.winfo_width()) // 2
+        py = app.winfo_rooty() + (app.winfo_height() - dlg.winfo_height()) // 3
+        dlg.geometry(f"+{max(px, 0)}+{max(py, 0)}")
+    except Exception:
+        pass
+
+    # --- Background scan ---------------------------------------------------
+    result = {
+        "done": False,
+        "found": None,
+        "scanned": 0,
+        "total": 0,
+        "errors": 0,
+        "current": "",
+        "error": None,
+    }
+
+    def _progress_cb(scanned, path, total):
+        # Called from the worker thread. Only mutate primitives -- the main
+        # thread reads them via _poll(). Never touch tk widgets here.
+        result["scanned"] = scanned
+        result["total"] = total
+        try:
+            result["current"] = os.path.basename(path) if path else ""
+        except Exception:
+            result["current"] = ""
+
+    def _worker():
+        try:
+            found, scanned, errors = _scan_folder_for_genres(
+                folder,
+                Config.SUPPORTED_AUDIO_EXTENSIONS,
+                progress_callback=_progress_cb,
+            )
+            result["found"] = found
+            result["scanned"] = scanned
+            result["errors"] = errors
+        except Exception as e:
+            result["error"] = e
+        finally:
+            result["done"] = True
+
+    # Poll state tracks whether we've already switched the progress bar
+    # from its initial indeterminate (bouncing) mode to determinate
+    # (filling) mode. We can only do that once the total is known.
+    poll_state = {"switched_to_determinate": False}
+
+    def _poll():
+        # Called on the main thread via after(). Updates the UI and either
+        # reschedules itself or triggers the finish sequence.
+        total = result["total"]
+        scanned = result["scanned"]
+
+        # Switch to determinate mode once the worker reports the total
+        # from its count pass. Guarded so we only reconfigure once.
+        if total > 0 and not poll_state["switched_to_determinate"]:
+            pb.stop()
+            pb.configure(mode="determinate", maximum=total, value=scanned)
+            poll_state["switched_to_determinate"] = True
+        elif poll_state["switched_to_determinate"]:
+            pb["value"] = scanned
+
+        if cancel_flag["cancel"]:
+            status_var.set(
+                f"Cancelling... (finishing current file, {scanned} scanned)"
+            )
+        else:
+            if total > 0:
+                status_var.set(f"Scanned {scanned} of {total} files...")
+            else:
+                status_var.set("Counting files...")
+        if result["done"]:
+            pb.stop()
+            try:
+                dlg.grab_release()
+            except Exception:
+                pass
+            dlg.destroy()
+            _finish()
+            return
+        dlg.after(120, _poll)
+
+    def _finish():
+        global _genre_dictionary
+
+        if cancel_flag["cancel"]:
+            log_message(
+                f"[INFO] Genre scan cancelled after {result['scanned']} file(s).",
+                log_type="debug",
+            )
+            return
+
+        if result["error"] is not None:
+            log_message(f"[ERROR] Genre scan failed: {result['error']}", log_type="debug")
+            messagebox.showerror(
+                "Scan Failed", f"Could not scan folder:\n{result['error']}"
+            )
+            return
+
+        found = result["found"] or set()
+        scanned = result["scanned"]
+        errors = result["errors"]
+
+        if not found:
+            msg = (f"Scanned {scanned} file(s) in:\n{folder}\n\n"
+                   f"No genre tags were found.")
+            if errors:
+                msg += f"\n\n({errors} file(s) could not be read.)"
+            messagebox.showinfo("No Genres Found", msg)
+            log_message(
+                f"[INFO] Scan complete: {scanned} files, 0 genres, {errors} errors.",
+                log_type="debug",
+            )
+            return
+
+        try:
+            added, skipped = _merge_genres_into_file(sorted(found, key=str.lower))
+        except Exception as e:
+            log_message(f"[ERROR] Failed to update genres.txt: {e}", log_type="debug")
+            messagebox.showerror("Write Failed", f"Could not update genres.txt:\n{e}")
+            return
+
+        # Reload the in-memory dictionary so autocomplete sees the new entries.
+        _genre_dictionary = _load_genres()
+
+        summary = (
+            f"Scanned {scanned} file(s) in:\n{folder}\n\n"
+            f"Found {len(found)} unique genre(s).\n"
+            f"Added {len(added)} new, skipped {skipped} already present.\n\n"
+            f"Dictionary now has {len(_genre_dictionary)} genre(s)."
+        )
+        if errors:
+            summary += f"\n\n({errors} file(s) could not be read.)"
+        log_message(
+            f"[INFO] Genre scan: {scanned} files, {len(found)} unique, "
+            f"+{len(added)} new, {skipped} dupes, {errors} errors.",
+            log_type="debug",
+        )
+        messagebox.showinfo("Genre Dictionary Updated", summary)
+
+    threading.Thread(target=_worker, daemon=True).start()
+    dlg.after(120, _poll)
+
+
+# SAVE METADATA sits directly under the comment field (last basic field)
+# and above the album art. Wrapped in a lambda so the name is resolved at
+# click time -- apply_basic_fields is defined later in the file.
+save_metadata_button = create_styled_button(
+    left_panel, "SAVE METADATA", lambda: apply_basic_fields()
+)
+save_metadata_button.pack(side="top", fill="x", padx=10, pady=(5, 0))
+
 # Add a frame for album cover as a direct child of left_panel
 album_cover_subframe = ttk.Frame(left_panel, style='TFrame', borderwidth=0)
-album_cover_subframe.pack(fill="none", expand=False, pady=(5, 5), padx=10)
+# expand=True claims all leftover vertical space between SAVE METADATA
+# and the bottom-pinned maintenance/CLEAR rows; anchor="center" then
+# vertically centers the fixed-size album art within that space.
+album_cover_subframe.pack(fill="none", expand=True, pady=(5, 0), padx=10, anchor="center")
 
 # Create a fixed-size frame to contain the album art
 album_art_container = ttk.Frame(album_cover_subframe, 
@@ -509,7 +1273,10 @@ album_cover_label.bind("<Button-3>", show_album_art_context_menu)
 # (Only Progress Bars & Status Remain)
 
 top_frame = ttk.Frame(right_panel)
-top_frame.pack(fill="x", padx=Config.PADDING["DEFAULT"], pady=Config.PADDING["DEFAULT"])
+# Was packed at the top of right_panel; now pinned to the bottom so the
+# API + file progress bars act as a status strip below the log/action
+# column. Kept the name "top_frame" to avoid a rename across the file.
+top_frame.pack(side="bottom", fill="x", padx=Config.PADDING["DEFAULT"], pady=(0, Config.PADDING["SMALL"]))
 
 # Remove the original API frame and buttons frame from top_frame
 
@@ -576,7 +1343,7 @@ filter_entry.pack(side="left", fill="x", expand=True)
 table_container = ttk.Frame(middle_frame)
 table_container.pack(fill="both", expand=True)
 
-columns = ("Artist", "Title", "Album", "Catalog Number", "Album Artist", "Year", "Track", "Genre", "File Path")
+columns = ("Artist", "Title", "Album", "Catalog Number", "Album Artist", "Year", "Track", "Genre", "File Path", "Comment")
 
 # Create a frame with a border for the table
 table_border_frame = ttk.Frame(table_container, relief="solid", borderwidth=1)  # Use ttk.Frame with system border style
@@ -586,8 +1353,15 @@ table_border_frame.pack(fill="both", expand=True)
 for widget in table_border_frame.winfo_children():
     widget.pack_forget()
 
-# Pack the table inside the border frame using grid
-file_table = ttk.Treeview(table_border_frame, columns=columns, show="headings", height=Config.DIMENSIONS["TABLE_HEIGHT"])
+# Pack the table inside the border frame using grid.
+# `displaycolumns` hides File Path from rendering entirely (no header, no
+# separator, no reserved space) while keeping it available in values[8] for
+# every existing code path that resolves a row back to its file.
+_display_cols = tuple(c for c in columns if c != "File Path")
+file_table = ttk.Treeview(table_border_frame, columns=columns,
+                          displaycolumns=_display_cols,
+                          show="headings",
+                          height=Config.DIMENSIONS["TABLE_HEIGHT"])
 file_table.grid(row=0, column=0, sticky="nsew")
 
 # Enable drag and drop
@@ -602,19 +1376,39 @@ file_table.dnd_bind('<<Drop>>', lambda e: file_ops_handle_drop(
     table=file_table,
     supported_extensions=Config.SUPPORTED_AUDIO_EXTENSIONS,
     count_var=file_count_var,
-    update_table_func=update_table
+    update_table_func=_import_files_with_progress
 ))
 
-# Add scrollbar to table with autohide
+# Add vertical scrollbar to table with autohide
 table_scrollbar = ttk.Scrollbar(table_border_frame, orient="vertical", command=file_table.yview)
 file_table.configure(yscrollcommand=lambda f, l: autohide_scrollbar(table_scrollbar, f, l))
 # Initially hide the scrollbar
 table_scrollbar.grid_remove()  # Hide initially instead of showing
 
+# Add horizontal scrollbar with inline autohide (the shared autohide helper
+# is hardcoded for vertical positioning, so we manage this one directly).
+htable_scrollbar = ttk.Scrollbar(table_border_frame, orient="horizontal", command=file_table.xview)
+def _autohide_htable_scrollbar(first, last):
+    try:
+        first_f, last_f = float(first), float(last)
+        if not htable_scrollbar.winfo_exists():
+            return
+        if first_f <= 0.0 and last_f >= 1.0:
+            htable_scrollbar.grid_remove()
+        else:
+            if not htable_scrollbar.grid_info():
+                htable_scrollbar.grid(row=1, column=0, sticky="ew")
+        htable_scrollbar.set(first, last)
+    except Exception:
+        pass
+file_table.configure(xscrollcommand=_autohide_htable_scrollbar)
+htable_scrollbar.grid_remove()  # Hide initially
+
 # Configure grid weights and sizes
 table_border_frame.columnconfigure(0, weight=1)
 table_border_frame.columnconfigure(1, weight=0, minsize=0)  # Set minsize to 0 to prevent reserved space
 table_border_frame.rowconfigure(0, weight=1)
+table_border_frame.rowconfigure(1, weight=0, minsize=0)  # Horizontal scrollbar row
 
 # Configure table tags
 configure_table_tags(file_table)
@@ -629,7 +1423,8 @@ column_widths = {
     "Year": 80,
     "Track": 80,
     "Genre": 200,
-    "File Path": 0  # Set width to 0 to hide it
+    "File Path": 0,  # Set width to 0 to hide it
+    "Comment": 250
 }
 
 for col in columns:
@@ -692,44 +1487,11 @@ debug_scrollbar.pack(side="right", fill="y")
 # Configure the logger with the text widgets
 logger.set_debug_widget(debug_logbox)
 
-# Clear Buttons
-button_frame = ttk.Frame(bottom_frame)
-button_frame.pack(side="right", padx=Config.PADDING["SMALL"])
-
-# Process button at the top of button frame
-process_button = create_styled_button(button_frame, "PROCESS", lambda: start_processing())
-process_button.pack(fill="x", pady=Config.PADDING["SMALL"])
-
-# Ship button below process button
-process_button = create_styled_button(button_frame, "EXPORT", lambda: organize_to_collection())
-process_button.pack(fill="x", pady=Config.PADDING["SMALL"])
-
-# Stop button below ship button
-process_button = create_styled_button(button_frame, "STOP", lambda: stop_processing_files(), is_danger=True)
-process_button.pack(fill="x", pady=Config.PADDING["SMALL"])
-
-# Create a frame for checkboxes to be on the same line
-checkbox_frame = ttk.Frame(button_frame)
-checkbox_frame.pack(fill="x", pady=Config.PADDING["SMALL"])
-
-# Metadata save options in horizontal layout
-for checkbox_text, variable in [
-    ("art", save_art_var),
-    ("year", save_year_var),
-    ("catalog", save_catalog_var),
-]:
-    checkbox = tk.Checkbutton(checkbox_frame, text=checkbox_text, variable=variable)
-    style_checkbutton(checkbox)
-    checkbox.pack(side="left", padx=2)
-
-# Add new control buttons
-for button_text, command in [
-    ("REFRESH", lambda: refresh_file_list()),
-    ("REMOVE SELECTED", lambda: remove_selected_items()),
-]:
-    process_button = create_styled_button(button_frame, button_text, command)
-    process_button.pack(fill="x", pady=Config.PADDING["SMALL"])
-    
+# NOTE: The PROCESS / EXPORT / STOP / checkbox / REFRESH / REMOVE SELECTED
+# button column that used to live on the right side of bottom_frame was
+# moved into the left panel so all interactive controls live in one place.
+# See process_export_subframe, checkbox_subframe, stop_button above, and
+# the maintenance_subframe pinned near the bottom of the left panel.
 
 # Add Delete key binding to the table
 file_table.bind('<Delete>', lambda e: remove_selected_items())
@@ -1113,6 +1875,37 @@ def start_editing(event):
     
     # Get the region that was clicked
     region = file_table.identify_region(event.x, event.y)
+
+    # Excel-style: double-click a header separator to autosize the column to
+    # the left of it based on the widest visible value (uncapped).
+    if region == "separator":
+        # identify_column at the exact separator returns the column to the
+        # RIGHT of the divider; offset a few px left to target the column
+        # whose right edge was clicked (matches Excel behavior).
+        col_id = file_table.identify_column(event.x - 4)
+        if not col_id:
+            return "break"
+        try:
+            col_idx = int(col_id.replace("#", "")) - 1
+        except ValueError:
+            return "break"
+        if col_idx < 0 or col_idx >= len(columns):
+            return "break"
+        col_name = columns[col_idx]
+        if col_name == "File Path":
+            return "break"
+        # Measure widest content in this column (~7px per char + 12px padding),
+        # bounded to a sane minimum. No maximum cap on purpose so the user's
+        # explicit double-click always shows the full widest value.
+        max_len = len(col_name)
+        for item in file_table.get_children():
+            val = file_table.set(item, col_name)
+            if val and len(str(val)) > max_len:
+                max_len = len(str(val))
+        new_width = max(40, max_len * 7 + 12)
+        file_table.column(col_name, width=new_width)
+        return "break"
+
     if region != "cell":
         return
         
@@ -1140,6 +1933,8 @@ def start_editing(event):
         5: "date",         # Year
         6: "tracknumber",  # Track
         7: "genre",        # Genre
+        # 8 is File Path (hidden, not editable)
+        9: "comment",      # Comment
     }
     
     # Get value directly from the audio file if possible
@@ -1572,7 +2367,8 @@ def process_metadata_fields(selected_items, values_by_field):
                     "Album Artist": get_tag_value(audio, "albumartist", ""),
                     "Year": get_tag_value(audio, "date", ""),
                     "Track": get_tag_value(audio, "tracknumber", ""),
-                    "Genre": get_tag_value(audio, "genre", "")
+                    "Genre": get_tag_value(audio, "genre", ""),
+                    "Comment": get_tag_value(audio, "comment", "")
                 }
                 
                 # Add values to their respective lists
@@ -1588,7 +2384,8 @@ def process_metadata_fields(selected_items, values_by_field):
                     "Album Artist": values[4],
                     "Year": values[5],
                     "Track": values[6],
-                    "Genre": values[7]
+                    "Genre": values[7],
+                    "Comment": values[9] if len(values) > 9 else ""
                 }
                 for field, value in table_mapping.items():
                     values_by_field[field].append(str(value) if value is not None else "")
@@ -1602,7 +2399,8 @@ def process_metadata_fields(selected_items, values_by_field):
                 "Album Artist": values[4],
                 "Year": values[5],
                 "Track": values[6],
-                "Genre": values[7]
+                "Genre": values[7],
+                "Comment": values[9] if len(values) > 9 else ""
             }
             for field, value in table_mapping.items():
                 values_by_field[field].append(str(value) if value is not None else "")
@@ -1629,6 +2427,14 @@ def apply_basic_fields():
         log_message("[ERROR] No files selected for updating", log_type="processing")
         return
     
+    # Strip any pending Genre ghost-text before reading the field so the
+    # unaccepted suggestion tail doesn't get written to the files.
+    try:
+        _genre_reject_ghost()
+        _hide_dropdown()
+    except Exception:
+        pass
+    
     # Get values from basic fields (strip to remove Excel paste artifacts like CR/LF)
     new_metadata = {field: str(var.get()).strip() for field, var in basic_field_vars.items()}
     
@@ -1648,7 +2454,8 @@ def apply_basic_fields():
         "Catalog Number": "catalognumber",
         "Year": "date",
         "Track": "tracknumber",
-        "Genre": "genre"
+        "Genre": "genre",
+        "Comment": "comment"
     }
     
     # Process each selected item
@@ -1826,16 +2633,18 @@ def apply_basic_fields():
     else:
         log_message("[WARNING] No files were updated")
 
-# Add save button below album art
-save_metadata_button = create_styled_button(left_panel, "SAVE METADATA", apply_basic_fields)
-save_metadata_button.pack(fill="x", padx=10, pady=5)
-
-# Add Clear buttons at the bottom of left panel - CREATE THESE FIRST
+# Add Clear buttons at the bottom of left panel.
+# We build the bottom stack in reverse pack order so the final vertical
+# layout (top -> bottom) reads:
+#   ... other widgets above ...
+#   SAVE METADATA         (packed last with side="bottom")
+#   UPDATE DICTIONARY     (packed second with side="bottom")
+#   [CLEAR FILES | CLEAR LOGS]  (packed first with side="bottom")
 try:
     # Create a container for the Clear buttons - side by side
     buttons_container = ttk.Frame(left_panel)
-    buttons_container.pack(side="bottom", fill="x", padx=10, pady=5)
-    
+    buttons_container.pack(side="bottom", fill="x", padx=10, pady=(0, 5))
+
     # Use lambda functions to delay the lookup of the functions until they're clicked
     create_button_pair(
         buttons_container, 
@@ -1847,23 +2656,28 @@ try:
 except Exception as e:
     log_message(f"[ERROR] Failed to add clear buttons: {str(e)}")
 
-# Add processing log to left panel - AFTER the buttons are created
-processing_container = ttk.Frame(left_panel)
-processing_container.pack(fill="both", expand=True, padx=10, pady=5)
+# Genre dictionary maintenance: scan a folder and merge its genre tags into
+# genres.txt so the sidepane autocomplete picks them up.
+update_dictionary_button = create_styled_button(
+    left_panel, "SCAN GENRES", lambda: update_genre_dictionary_from_folder()
+)
+update_dictionary_button.pack(side="bottom", fill="x", padx=10, pady=(0, 5))
 
-processing_listbox = create_styled_text(processing_container, height=25, state="disabled", wrap="word")
-processing_listbox.pack(side="left", fill="both", expand=True)
+# Table maintenance pair: REFRESH re-reads tags for the loaded list;
+# REMOVE SELECTED drops the highlighted rows. Grouped just above SCAN
+# GENRES and CLEAR since all four are non-editing utility actions.
+maintenance_subframe = ttk.Frame(left_panel)
+maintenance_subframe.pack(side="bottom", fill="x", padx=10, pady=(0, 5))
+create_button_pair(
+    maintenance_subframe,
+    "REFRESH", lambda: refresh_file_list(),
+    "REMOVE", lambda: remove_selected_items(),
+)
 
-# Configure tags for colored text
-configure_text_tags(processing_listbox)
-
-# Add scrollbar to processing listbox with autohide - using default style
-processing_scrollbar = ttk.Scrollbar(processing_container, orient="vertical", command=processing_listbox.yview)
-processing_listbox.configure(yscrollcommand=lambda f, l: autohide_scrollbar(processing_scrollbar, f, l))
-processing_scrollbar.pack(side="right", fill="y")
-
-# Update the logger with the processing widget
-logger.set_processing_widget(processing_listbox)
+# Note: the old "processing log" widget that lived here was removed --
+# its routing was misdesigned (most log_type="processing" callers were
+# never actually reaching it). OK/NOK messages from PROCESS now fall
+# back to the debug log via the logger's existing None-widget branch.
 
 def load_default_album_art():
     """Load the default album art image when no art is available."""
@@ -2128,6 +2942,195 @@ def update_table():
     # Force UI update
     app.update_idletasks()
 
+
+def _sort_file_list_by_album_track():
+    """Sort ``file_list`` in-place by album name, then track number, then
+    title. Called once right after each import so newly-loaded files are
+    grouped by album with tracks in play order. Files without album
+    metadata sort last; unparseable track numbers sort to the end of
+    their album.
+
+    Requires ``file_metadata_cache`` to be populated for the files being
+    sorted (missing entries fall through to the default "end of list"
+    ordering rather than raising).
+    """
+    def _key(fp):
+        meta = file_metadata_cache.get(fp) or {}
+        album = (meta.get("album") or "").strip().lower() or "\uffff"
+        track_str = (meta.get("tracknumber") or "").strip()
+        try:
+            # Handle common formats: "5", "05", "5/12", "1-05" (disc-track).
+            leading = track_str.split("/")[0].split("-")[-1]
+            track_num = int(leading)
+        except (ValueError, IndexError):
+            track_num = 9_999
+        title = (meta.get("title") or "").strip().lower()
+        return (album, track_num, title)
+
+    file_list.sort(key=_key)
+
+
+# Threshold below which we just call update_table() directly without any
+# progress dialog. Reading a handful of files is fast enough that the
+# dialog would flash and be more distracting than helpful.
+_IMPORT_PROGRESS_THRESHOLD = 20
+
+
+def _import_files_with_progress():
+    """Populate the metadata cache for any files in `file_list` that
+    aren't already cached, then refresh the table. If there are many
+    files to load, shows a modal progress dialog styled identically to
+    the UPDATE DICTIONARY dialog (bold Consolas labels, determinate bar).
+
+    Used as the post-import callback for the FOLDER button and drag-and-
+    drop -- both of which can dump thousands of files at once and used
+    to block the UI while mutagen opened every file on the main thread.
+    """
+    files_to_load = [
+        f for f in file_list
+        if f not in file_metadata_cache and os.path.exists(f)
+    ]
+
+    if len(files_to_load) < _IMPORT_PROGRESS_THRESHOLD:
+        # Small import -- preload metadata inline so the sort below has
+        # something to work with, then sort the file list by album/track
+        # so the table reads in album order out of the box.
+        for fp in files_to_load:
+            try:
+                audio = get_audio_file(fp)
+                if audio is not None:
+                    file_metadata_cache[fp] = {
+                        "artist": get_tag_value(audio, "artist"),
+                        "title": get_tag_value(audio, "title"),
+                        "album": get_tag_value(audio, "album"),
+                        "albumartist": get_tag_value(audio, "albumartist"),
+                        "catalognumber": get_tag_value(audio, "catalognumber"),
+                        "date": get_tag_value(audio, "date"),
+                        "tracknumber": get_tag_value(audio, "tracknumber"),
+                        "genre": get_tag_value(audio, "genre"),
+                        "comment": get_tag_value(audio, "comment"),
+                    }
+            except Exception:
+                pass
+        _sort_file_list_by_album_track()
+        update_table()
+        return
+
+    total = len(files_to_load)
+
+    # --- Modal progress dialog (same styling as UPDATE DICTIONARY) --------
+    dlg = tk.Toplevel(app)
+    dlg.title("Loading Files")
+    dlg.transient(app)
+    dlg.resizable(False, False)
+    dlg.configure(bg=Config.COLORS["BACKGROUND"])
+    dlg.grab_set()
+
+    cancel_flag = {"cancel": False}
+    def _on_close():
+        cancel_flag["cancel"] = True
+    dlg.protocol("WM_DELETE_WINDOW", _on_close)
+
+    dialog_font = ("Consolas", Config.FONTS["TABLE_HEADING_SIZE"], "bold")
+
+    header = tk.Label(
+        dlg,
+        text="Loading file metadata...",
+        bg=Config.COLORS["BACKGROUND"],
+        fg=Config.COLORS["TEXT"],
+        font=dialog_font,
+    )
+    header.pack(padx=20, pady=(15, 5))
+
+    count_label = tk.Label(
+        dlg,
+        text=f"{total} files",
+        bg=Config.COLORS["BACKGROUND"],
+        fg=Config.COLORS["SECONDARY_TEXT"],
+        font=dialog_font,
+    )
+    count_label.pack(padx=20, pady=(0, 10))
+
+    pb = ttk.Progressbar(dlg, mode="determinate", length=440, maximum=total)
+    pb.pack(padx=20, pady=5)
+
+    status_var = StringVar(value=f"Loaded 0 of {total}...")
+    status_label = tk.Label(
+        dlg,
+        textvariable=status_var,
+        bg=Config.COLORS["BACKGROUND"],
+        fg=Config.COLORS["SECONDARY_TEXT"],
+        font=dialog_font,
+        width=60,
+        anchor="w",
+    )
+    status_label.pack(padx=20, pady=(5, 15))
+
+    # Center over the main window.
+    dlg.update_idletasks()
+    try:
+        px = app.winfo_rootx() + (app.winfo_width() - dlg.winfo_width()) // 2
+        py = app.winfo_rooty() + (app.winfo_height() - dlg.winfo_height()) // 3
+        dlg.geometry(f"+{max(px, 0)}+{max(py, 0)}")
+    except Exception:
+        pass
+
+    # --- Worker: preload metadata on a background thread -------------------
+    # We only mutate the dict of primitives from the worker. Tk widgets
+    # are touched exclusively from the main thread via _poll().
+    state = {"loaded": 0, "done": False}
+
+    def _worker():
+        for i, fp in enumerate(files_to_load):
+            if cancel_flag["cancel"]:
+                break
+            try:
+                audio = get_audio_file(fp)
+                if audio is not None:
+                    file_metadata_cache[fp] = {
+                        "artist": get_tag_value(audio, "artist"),
+                        "title": get_tag_value(audio, "title"),
+                        "album": get_tag_value(audio, "album"),
+                        "albumartist": get_tag_value(audio, "albumartist"),
+                        "catalognumber": get_tag_value(audio, "catalognumber"),
+                        "date": get_tag_value(audio, "date"),
+                        "tracknumber": get_tag_value(audio, "tracknumber"),
+                        "genre": get_tag_value(audio, "genre"),
+                        "comment": get_tag_value(audio, "comment"),
+                    }
+            except Exception:
+                pass
+            state["loaded"] = i + 1
+        state["done"] = True
+
+    def _poll():
+        loaded = state["loaded"]
+        pb["value"] = loaded
+        if cancel_flag["cancel"]:
+            status_var.set(f"Cancelling... ({loaded} of {total} loaded)")
+        else:
+            status_var.set(f"Loaded {loaded} of {total}...")
+        if state["done"]:
+            try:
+                dlg.grab_release()
+            except Exception:
+                pass
+            dlg.destroy()
+            # Sort now that the worker has populated the metadata cache
+            # so the newly-imported files land grouped by album.
+            _sort_file_list_by_album_track()
+            update_table()
+            if cancel_flag["cancel"]:
+                log_message(
+                    f"[INFO] File import cancelled after loading {loaded} of {total} files.",
+                    log_type="debug",
+                )
+            return
+        dlg.after(100, _poll)
+
+    threading.Thread(target=_worker, daemon=True).start()
+    dlg.after(100, _poll)
+
 def clear_file_list():
     """Clear all file-related data structures and update the UI."""
     global file_list
@@ -2151,9 +3154,10 @@ def clear_file_list():
     log_message("[INFO] File list and all related data cleared.")
 
 def clear_logs():
-    """Clear both log boxes and properly reset their scrollbars."""
-    # Use the new logger's clear_logs method
-    logger.clear_logs(app, debug_scrollbar, processing_scrollbar)
+    """Clear the debug log box and reset its scrollbar."""
+    # processing_scrollbar is None because that widget was removed;
+    # logger.clear_logs handles a missing processing widget cleanly.
+    logger.clear_logs(app, debug_scrollbar, None)
 
 # Add the function to open the folder in explorer
 def show_in_explorer():

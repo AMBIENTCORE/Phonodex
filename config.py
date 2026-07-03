@@ -61,10 +61,20 @@ load_settings()
 
 class Config:
     """Main configuration class."""
-    
+
+    # App version -- keep in sync with AppVersion in Phonodex.iss.
+    # Used for display (window title / About dialog if added later) and
+    # for the "check for updates" comparison against GitHub Releases.
+    # Bump both this and Phonodex.iss (plus OutputBaseFilename) on every
+    # release.
+    APP_VERSION = "1.0"
+
     # API Configuration
     DISCOGS_SEARCH_URL = "https://api.discogs.com/database/search"
     API_KEY_FILE = _USER_DATA_ROOT / "api_key.txt"
+    # Genre autocomplete dictionary (one genre per line; lines starting with # are comments).
+    # Location: %LOCALAPPDATA%\Phonodex\genres.txt when frozen, next to the project when run as script.
+    GENRES_FILE = _USER_DATA_ROOT / "genres.txt"
     API = {
         "RATE_LIMIT": 60,
         "TIMEOUT": 10,
@@ -119,6 +129,7 @@ class Config:
         "ERROR": "#F44336",    # Material Design Red
         "BACKGROUND": "#1e1e1e",  # Dark background
         "SECONDARY_BACKGROUND": "#252526",  # Slightly lighter dark background
+        "BORDER": "#3e3e42",  # Column divider / outline (VS Code separator gray)
         "TEXT": "#ffffff",  # White text
         "SECONDARY_TEXT": "#cccccc",  # Light gray text
         "VALID_ENTRY": "#1b3a1b",    # Dark green
@@ -139,7 +150,9 @@ class Config:
         "SAVE_BUTTON_WIDTH": 3,
         "PROGRESS_BAR_LENGTH": 100,
         "TABLE_HEIGHT": 20,
-        "DEBUG_LOG_HEIGHT": 12,
+        # Debug log shrunk from 12 to 6 rows so the file table can claim
+        # the reclaimed vertical space on the right side.
+        "DEBUG_LOG_HEIGHT": 6,
         "DEBUG_LOG_WIDTH": 80,
         "PROCESSING_LOG_HEIGHT": 6,
         "PROCESSING_LOG_WIDTH": 80,
@@ -166,7 +179,11 @@ class Config:
             "FAMILY": "I pixel u",
             "FILE": "assets/I-pixel-u.ttf"
         },
-        "WIDGET_PADDING": 5,
+        # Internal button padding (padx/pady on tk.Button). Lowered from 5
+        # to 2 to fit more buttons vertically in the left panel now that
+        # PROCESS/EXPORT/STOP/checkboxes/REFRESH/REMOVE SELECTED were moved
+        # over from the right side. Buttons stay readable at this size.
+        "WIDGET_PADDING": 2,
         "PANEL_WEIGHTS": {
             "LEFT": 1,
             "RIGHT": 3
