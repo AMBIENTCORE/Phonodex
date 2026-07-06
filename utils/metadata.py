@@ -18,6 +18,32 @@ import threading
 import os
 import re
 from services.api_client import make_api_request
+from utils.matching import (
+    normalize, similarity, extract_year, extract_track_number,
+    split_discogs_title, strip_discogs_artist_suffix, parse_filename,
+    score_release_candidate,
+)
+
+# Cache for full Discogs release details (tracklist/images/labels), keyed by
+# release id. Populated by fetch_release_details and reused across files that
+# resolve to the same release so we only pay for one /releases/{id} call.
+release_details_cache = {}
+
+# Confidence at/above which identify_release stops issuing further search
+# strategies (a strong match is already in hand).
+IDENTIFY_HIGH_CONFIDENCE = 0.9
+
+# Suggestion field -> underlying tag name used by set_tag_value. "year" maps to
+# the "date" tag. Cover art is handled separately (see apply_release_suggestion).
+SUGGESTION_TEXT_FIELDS = {
+    "artist": "artist",
+    "title": "title",
+    "album": "album",
+    "albumartist": "albumartist",
+    "tracknumber": "tracknumber",
+    "year": "date",
+    "catalognumber": "catalognumber",
+}
 
 # Cache for metadata results
 album_catalog_cache = {}
@@ -1076,3 +1102,460 @@ def update_mp3_metadata(file_path, column_num, new_value, callbacks=None):
     """
     # Use the existing utility function
     return update_tag_by_column(file_path, column_num, new_value, callbacks=callbacks)
+
+
+# ===========================================================================
+# Release identification pipeline ("find the release no matter what tags exist")
+# ===========================================================================
+
+def identify_release(known, api_token, search_url, request_hooks=None, max_searches=4):
+    """Identify candidate Discogs releases from whatever tags are available.
+
+    Runs a cascade of structured Discogs searches, ordered best->worst by
+    expected precision, using only the fields present in ``known``. Results from
+    every strategy are pooled, de-duplicated by release id, scored against the
+    known tags, and returned ranked by confidence. The cascade stops early once
+    a strong match (>= IDENTIFY_HIGH_CONFIDENCE) is found or ``max_searches``
+    API calls have been issued, so we don't burn the rate limit needlessly.
+
+    Args:
+        known: dict with any of artist, albumartist, album, title, year,
+            catalognumber.
+        api_token: Discogs API token.
+        search_url: Discogs /database/search endpoint.
+        request_hooks: optional dict with callables ``before`` -> bool (return
+            False to abort, e.g. rate-limited) and ``after`` -> None (receives
+            response headers) so the caller can drive the rate-limit UI.
+        max_searches: hard cap on the number of search API calls.
+
+    Returns:
+        (ranked_candidates, last_headers). Each candidate is a dict:
+        {id, master_id, title, artist, album, year, catno, cover_image, thumb,
+         score, strategy}.
+    """
+    if not api_token or not search_url:
+        log_message("[ERROR] API token or search URL not provided.")
+        return [], None
+
+    artist = (known.get("artist") or "").strip()
+    albumartist = (known.get("albumartist") or "").strip()
+    album = (known.get("album") or "").strip()
+    title = (known.get("title") or "").strip()
+    year = extract_year(known.get("year"))
+    catno = (known.get("catalognumber") or "").strip()
+    primary_artist = artist or albumartist
+
+    # Build the ordered strategy list from what we actually know.
+    strategies = []
+    if catno:
+        strategies.append(("catno", {"catno": catno}))
+    if primary_artist and album:
+        strategies.append(("artist+album", {"artist": primary_artist, "release_title": album}))
+    if albumartist and album and albumartist.lower() != artist.lower():
+        strategies.append(("albumartist+album", {"artist": albumartist, "release_title": album}))
+    if primary_artist and title and not album:
+        strategies.append(("artist+track", {"artist": primary_artist, "track": title}))
+    if album and year:
+        strategies.append(("album+year", {"release_title": album, "year": year}))
+    free_terms = " ".join(t for t in [primary_artist, album or title] if t).strip()
+    if free_terms:
+        strategies.append(("q", {"q": free_terms}))
+
+    if not strategies:
+        log_message("[IDENTIFY] Nothing to search on (no usable tags).")
+        return [], None
+
+    candidates_by_id = {}
+    last_headers = None
+    searches = 0
+
+    for name, params in strategies:
+        if searches >= max_searches:
+            break
+        if request_hooks and request_hooks.get("before"):
+            if not request_hooks["before"]():
+                log_message("[IDENTIFY] Aborting search cascade (rate limited).")
+                break
+        query = dict(params)
+        query["token"] = api_token
+        query["type"] = "release"
+        data, headers = make_api_request(search_url, query)
+        searches += 1
+        last_headers = headers or last_headers
+        if request_hooks and request_hooks.get("after"):
+            request_hooks["after"](headers)
+
+        results = (data or {}).get("results", []) if data else []
+        log_message(f"[IDENTIFY] strategy '{name}' -> {len(results)} results")
+        for release in results:
+            release_id = release.get("id")
+            if not release_id:
+                continue
+            candidate_score = score_release_candidate(known, release)
+            existing = candidates_by_id.get(release_id)
+            if existing and existing["score"] >= candidate_score:
+                continue
+            r_artist, r_album = split_discogs_title(release.get("title", ""))
+            candidates_by_id[release_id] = {
+                "id": release_id,
+                "master_id": release.get("master_id"),
+                "title": release.get("title", ""),
+                "artist": r_artist,
+                "album": r_album,
+                "year": str(release.get("year", "") or ""),
+                "catno": release.get("catno", ""),
+                "cover_image": release.get("cover_image", ""),
+                "thumb": release.get("thumb", ""),
+                "score": candidate_score,
+                "strategy": name,
+            }
+
+        best = max((c["score"] for c in candidates_by_id.values()), default=0.0)
+        if best >= IDENTIFY_HIGH_CONFIDENCE:
+            log_message(f"[IDENTIFY] strong match {best:.2f} found, stopping cascade early.")
+            break
+
+    ranked = sorted(candidates_by_id.values(), key=lambda c: c["score"], reverse=True)
+    log_message(f"[IDENTIFY] {len(ranked)} candidate(s); best score "
+                f"{ranked[0]['score']:.2f}" if ranked else "[IDENTIFY] no candidates")
+    return ranked, last_headers
+
+
+def fetch_release_details(release_id, api_token, search_url, request_hooks=None):
+    """Fetch full Discogs release details (tracklist/images/labels), cached.
+
+    Returns (release_data, headers). ``release_data`` is None on failure. Cached
+    per release id so multiple files on the same release share one API call.
+    """
+    if not release_id:
+        return None, None
+    with cache_lock:
+        if release_id in release_details_cache:
+            return release_details_cache[release_id], None
+    if request_hooks and request_hooks.get("before"):
+        if not request_hooks["before"]():
+            return None, None
+    api_base = _build_discogs_api_base(search_url)
+    url = f"{api_base}/releases/{release_id}"
+    data, headers = make_api_request(url, {"token": api_token})
+    if request_hooks and request_hooks.get("after"):
+        request_hooks["after"](headers)
+    if data:
+        with cache_lock:
+            release_details_cache[release_id] = data
+    return data, headers
+
+
+def _flatten_tracklist(release_data):
+    """Return only actual playable tracks, skipping headings/index entries."""
+    tracks = []
+    for entry in (release_data.get("tracklist", []) or []):
+        # Discogs marks section headers with type_ == "heading"; real tracks are
+        # "track" (or occasionally missing the field on older data).
+        if entry.get("type_") in (None, "", "track"):
+            tracks.append(entry)
+    return tracks
+
+
+def map_file_to_track(known, release_data):
+    """Match a file to a track on the release by track number, then fuzzy title.
+
+    Returns the matched track dict, or None if nothing lines up confidently.
+    """
+    tracks = _flatten_tracklist(release_data)
+    if not tracks:
+        return None
+
+    known_tn = extract_track_number(known.get("tracknumber"))
+    known_title = known.get("title") or ""
+
+    # 1) Exact track-number match against the numeric part of each position.
+    if known_tn:
+        for track in tracks:
+            if extract_track_number(track.get("position")) == known_tn:
+                return track
+        # Positional fallback: the Nth track, but only trust it if the title
+        # also plausibly matches (or we have no title to check against).
+        try:
+            n = int(known_tn)
+        except ValueError:
+            n = 0
+        if 1 <= n <= len(tracks):
+            candidate = tracks[n - 1]
+            if not known_title or similarity(known_title, candidate.get("title", "")) >= 0.4:
+                return candidate
+
+    # 2) Best fuzzy title match.
+    if known_title:
+        best, best_score = None, 0.0
+        for track in tracks:
+            score = similarity(known_title, track.get("title", ""))
+            if score > best_score:
+                best, best_score = track, score
+        if best and best_score >= 0.6:
+            return best
+
+    return None
+
+
+def has_embedded_art(audio_file):
+    """Return True if the loaded audio file already has embedded cover art."""
+    try:
+        if isinstance(audio_file, MP3):
+            return bool(audio_file.tags and audio_file.tags.getall("APIC"))
+        if isinstance(audio_file, FLAC):
+            return bool(audio_file.pictures)
+        if isinstance(audio_file, MP4):
+            return bool(audio_file.get("covr"))
+    except Exception:
+        return False
+    return False
+
+
+def _resolve_art_for_suggestion(artist, album, candidate, release_data):
+    """Pick the best cover URL without extra Discogs calls.
+
+    iTunes first (free, usually the true front cover), then the already-fetched
+    release images, then the candidate's own thumbnail.
+    """
+    try:
+        from config import Config
+        prefer_itunes = Config.ALBUM_ART.get("PREFER_ITUNES", True)
+    except Exception:
+        prefer_itunes = True
+
+    if prefer_itunes and album:
+        try:
+            from services.itunes_client import fetch_album_art_url
+            cover, thumb = fetch_album_art_url(artist, album)
+            if cover:
+                return cover, thumb
+        except Exception as e:
+            log_message(f"[COVER] iTunes lookup failed, using Discogs art: {e}", log_type="debug")
+
+    if release_data:
+        best = _pick_best_art_image(release_data.get("images", []), "release")
+        if best and best.get("url"):
+            return best["url"], best.get("thumb", "")
+
+    return candidate.get("cover_image", ""), candidate.get("thumb", "")
+
+
+# The user standardizes every Various-Artists compilation to the single word
+# "Various". Discogs (and other sources) may instead return "Various Artists",
+# "V.A.", "VA", etc. — map those spellings to the canonical form. Matching is
+# exact on the normalized name, so real artists like "Various Cruelties" are
+# left untouched.
+_VARIOUS_ALIASES = {"various", "various artists", "various artist", "va", "v a"}
+
+
+def _canonicalize_various(name):
+    """Return 'Various' for any Various-Artists spelling, else the name unchanged."""
+    if name and normalize(name) in _VARIOUS_ALIASES:
+        return "Various"
+    return name
+
+
+def build_track_suggestion(known, candidate, release_data, api_token, search_url):
+    """Build the proposed tag values for a single file from a chosen release.
+
+    Combines release-level fields (album, year, album artist, catalog) with the
+    matched track's fields (title, per-track artist, position) and resolves a
+    cover URL. Returns a dict with keys: artist, title, album, albumartist,
+    tracknumber, year, catalognumber, cover_image, thumb (missing pieces = "").
+    """
+    catalognumber = candidate.get("catno", "") or ""
+    if release_data:
+        album = release_data.get("title", "") or candidate.get("album", "")
+        year = str(release_data.get("year", "") or candidate.get("year", "") or "")
+        albumartist = ""
+        artists = release_data.get("artists", []) or []
+        if artists:
+            albumartist = strip_discogs_artist_suffix(artists[0].get("name", ""))
+        if not catalognumber:
+            for label in (release_data.get("labels", []) or []):
+                label_catno = (label.get("catno") or "").strip()
+                if label_catno and label_catno.upper() != "NONE":
+                    catalognumber = label_catno
+                    break
+    else:
+        album = candidate.get("album", "")
+        year = candidate.get("year", "")
+        albumartist = candidate.get("artist", "")
+
+    # Normalize the catalog number the same way the regular PROCESS flow does
+    # (select_by_frequency / fetch_metadata): strip spaces and uppercase, and fall
+    # back to the standardized "NONE" placeholder when the release has no catalog
+    # number, so behavior and folder naming stay consistent with regular PROCESS.
+    catalognumber = catalognumber.replace(" ", "").upper()
+    if not catalognumber:
+        catalognumber = "NONE"
+
+    artist = albumartist or candidate.get("artist", "")
+    title = ""
+    tracknumber = extract_track_number(known.get("tracknumber"))
+
+    track = map_file_to_track(known, release_data) if release_data else None
+    if track:
+        title = track.get("title", "")
+        track_artists = track.get("artists", []) or []
+        if track_artists:
+            per_track_artist = strip_discogs_artist_suffix(track_artists[0].get("name", ""))
+            if per_track_artist:
+                artist = per_track_artist
+        position = extract_track_number(track.get("position"))
+        if position:
+            tracknumber = position
+
+    cover_image, thumb = _resolve_art_for_suggestion(
+        artist or albumartist, album, candidate, release_data
+    )
+
+    # Standardize Various-Artists spellings to the user's canonical "Various" for
+    # the ALBUM artist only. The track artist is never "Various" — that's the
+    # album artist's role — so if the only artist we could resolve is the VA
+    # placeholder (no real per-track artist), leave it blank and suggest no
+    # artist change rather than writing "Various" into the track artist.
+    albumartist = _canonicalize_various(albumartist)
+    if _canonicalize_various(artist) == "Various":
+        artist = ""
+
+    return {
+        "artist": artist,
+        "title": title,
+        "album": album,
+        "albumartist": albumartist,
+        "tracknumber": tracknumber,
+        "year": year,
+        "catalognumber": catalognumber,
+        "cover_image": cover_image,
+        "thumb": thumb,
+    }
+
+
+def _download_cover_bytes(cover_url, api_token=None):
+    """Download cover image bytes (cached). Returns (data, mime) or (None, None)."""
+    with cache_lock:
+        if cover_url in album_cover_image_cache:
+            cached = album_cover_image_cache[cover_url]
+            return cached["data"], cached["mime"]
+
+    headers = {"User-Agent": "Phonodex/1.0", "Referer": "https://www.discogs.com/"}
+    if api_token:
+        headers["Authorization"] = f"Discogs token={api_token}"
+    try:
+        response = requests.get(cover_url, headers=headers, timeout=10)
+    except Exception as e:
+        log_message(f"[ERROR] Cover download failed: {e}")
+        return None, None
+    if response.status_code != 200:
+        log_message(f"[ERROR] Failed to download cover image (Status {response.status_code})")
+        return None, None
+
+    data = response.content
+    mime = response.headers.get("content-type", "image/jpeg")
+    with cache_lock:
+        album_cover_image_cache[cover_url] = {"data": data, "mime": mime}
+    return data, mime
+
+
+def apply_cover_art(audio_file, file_path, cover_url, api_token=None, log_fn=None):
+    """Download (cached) and embed cover art into an already-loaded audio file.
+
+    Returns True on success. Supports MP3, FLAC and MP4/M4A (same formats the
+    original updater handled); other formats are skipped with a log note.
+    """
+    log_fn = log_fn or (lambda msg: None)
+    image_data, mime_type = _download_cover_bytes(cover_url, api_token)
+    if image_data is None:
+        return False
+
+    try:
+        if isinstance(audio_file, FLAC):
+            audio_file.clear_pictures()
+            picture = Picture()
+            picture.type = 3  # Front cover
+            picture.mime = mime_type
+            picture.desc = "Front Cover"
+            picture.data = image_data
+            audio_file.add_picture(picture)
+            audio_file.save()
+        elif isinstance(audio_file, MP3):
+            if audio_file.tags is None:
+                audio_file.add_tags()
+            audio_file.tags.delall("APIC")
+            audio_file.tags.add(
+                APIC(encoding=3, mime=mime_type, type=3, desc="Front Cover", data=image_data)
+            )
+            audio_file.save()
+        elif isinstance(audio_file, MP4):
+            cover_format = MP4Cover.FORMAT_PNG if mime_type.endswith("png") else MP4Cover.FORMAT_JPEG
+            audio_file["covr"] = [MP4Cover(image_data, cover_format)]
+            audio_file.save()
+        else:
+            log_fn(f"[COVER] Album art not supported for this file type: {type(audio_file).__name__}")
+            return False
+        log_fn(f"[SUCCESS] Updated cover art for {os.path.basename(file_path)}")
+        return True
+    except Exception as e:
+        log_fn(f"[ERROR] Failed to embed cover art: {e}")
+        return False
+
+
+def apply_release_suggestion(file_path, suggestion, accepted, api_token=None,
+                             audio_file=None, callbacks=None):
+    """Write the accepted fields of a suggestion to a file.
+
+    Args:
+        file_path: path to the audio file.
+        suggestion: dict of proposed values (see build_track_suggestion);
+            cover art comes from its "cover_image"/"thumb" keys.
+        accepted: dict field->bool. Recognized keys are the text fields in
+            SUGGESTION_TEXT_FIELDS plus "art".
+        api_token: Discogs token (used only for cover download auth).
+        audio_file: optional pre-loaded mutagen object.
+        callbacks: optional dict with log_message, mark_updated, mark_processed.
+
+    Returns True if at least one field was written.
+    """
+    callbacks = callbacks or {}
+    log_fn = callbacks.get("log_message", lambda msg: None)
+    mark_updated = callbacks.get("mark_updated", lambda path: None)
+    mark_processed = callbacks.get("mark_processed", lambda path: None)
+
+    if audio_file is None:
+        from utils.file_operations import get_audio_file
+        audio_file = get_audio_file(file_path)
+    if not audio_file:
+        log_fn(f"[ERROR] Failed to load audio file: {file_path}")
+        return False
+
+    normalized_path = os.path.normpath(file_path)
+    updated = False
+
+    for field, tag in SUGGESTION_TEXT_FIELDS.items():
+        if not accepted.get(field):
+            continue
+        value = suggestion.get(field, "")
+        if value is None or str(value) == "":
+            continue
+        try:
+            # set_tag_value saves the file itself (consistent with inline edits).
+            if set_tag_value(audio_file, tag, str(value)):
+                updated = True
+                log_fn(f"[SUCCESS] {field} -> '{value}' for {os.path.basename(file_path)}")
+            else:
+                log_fn(f"[ERROR] Failed to set {field} for {os.path.basename(file_path)}")
+        except Exception as e:
+            log_fn(f"[ERROR] Failed to set {field}: {e}")
+
+    if accepted.get("art"):
+        cover_url = suggestion.get("cover_image") or suggestion.get("thumb")
+        if cover_url and apply_cover_art(audio_file, file_path, cover_url,
+                                         api_token=api_token, log_fn=log_fn):
+            updated = True
+
+    if updated:
+        mark_updated(normalized_path)
+    mark_processed(normalized_path)
+    return updated

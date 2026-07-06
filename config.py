@@ -197,3 +197,200 @@ class Config:
     }
 
 
+# ---------------------------------------------------------------------------
+# Skins
+# ---------------------------------------------------------------------------
+# A skin overrides the aesthetic colors, the custom "chrome" font (the pixel
+# font), and the default "no cover" album-art image. The data table / logs
+# keep their monospace (Consolas) font. Status colors are shared via the
+# Default palette so green=updated / red=failed stays meaningful unless a
+# skin deliberately overrides them.
+#
+# The selected skin is saved in the settings JSON under "skin" and applied at
+# startup BEFORE any styles are built. Switching skins auto-restarts the app.
+
+import copy as _copy
+
+# Snapshot the built-in look as the "Default" skin before any overlay.
+_DEFAULT_SKIN = {
+    "display_name": "DANGER",
+    # Aesthetic accent for previews/highlights (its "Pantone"). This is the
+    # app's red -- the LEAVE / STOP danger red -- NOT SUCCESS, which stays a
+    # fixed semantic green. Each new skin supplies its own accent.
+    "accent": "#990000",
+    "colors": _copy.deepcopy(Config.COLORS),
+    "font": dict(Config.STYLES["CUSTOM_FONT"]),
+    "no_cover": Config.ALBUM_ART["DEFAULT_IMAGE"],
+}
+
+# Registry of available skins. New skins are added here.
+SKINS = {
+    "Default": _DEFAULT_SKIN,
+    "Slime": {
+        "display_name": "SLIME",
+        "accent": "#aaff00",
+        "colors": {
+            "BACKGROUND": "#141a0d",
+            "SECONDARY_BACKGROUND": "#1f2913",
+            "BORDER": "#7cb518",
+            "TEXT": "#c6ff4d",
+            "SECONDARY_TEXT": "#8a9a3c",
+            "PROGRESSBAR": {"TROUGH": "#1f2913"},
+        },
+        "no_cover": "assets/no_cover_slime.png",
+    },
+    "Ye Olde Tagger": {
+        "display_name": "YE OLDE TAGGER",
+        "accent": "#a86b2e",
+        "labels": {"STOP": "HALT", "LEAVE": "BEGONE"},
+        "colors": {
+            "BACKGROUND": "#e8d8b0",
+            "SECONDARY_BACKGROUND": "#d8c290",
+            "BORDER": "#7a5230",
+            "TEXT": "#3b2a17",
+            "SECONDARY_TEXT": "#6b533a",
+            "VALID_ENTRY": "#b9cf8f",
+            "INVALID_ENTRY": "#dda28f",
+            "UPDATED_ROW": "#b9cf8f",
+            "FAILED_ROW": "#dda28f",
+            "PROGRESSBAR": {"TROUGH": "#d8c290"},
+        },
+        "no_cover": "assets/no_cover_yeoldetagger.png",
+    },
+    "Amber Terminal": {
+        "display_name": "AMBER TERMINAL",
+        "accent": "#ffcf4d",
+        "labels": {"STOP": "KILL", "LEAVE": "EXIT"},
+        "colors": {
+            "BACKGROUND": "#0a0a08",
+            "SECONDARY_BACKGROUND": "#14120c",
+            "BORDER": "#5a4410",
+            "TEXT": "#ffb000",
+            "SECONDARY_TEXT": "#a9760a",
+            "PROGRESSBAR": {"TROUGH": "#14120c"},
+        },
+        "no_cover": "assets/no_cover_amberterminal.png",
+    },
+    # ------------------------------------------------------------------
+    # Extra skins. Light themes override the status-row/entry tints so
+    # OK/NOK stay readable on a light background. Each carries a signature
+    # accent (used on selected rows) and themed STOP/LEAVE labels.
+    # ------------------------------------------------------------------
+    "Sakura": {
+        "display_name": "SAKURA",
+        "accent": "#ff6f91",
+        "colors": {
+            "BACKGROUND": "#fff0f5",
+            "SECONDARY_BACKGROUND": "#ffe0ec",
+            "BORDER": "#e6a8c3",
+            "TEXT": "#5c3a4a",
+            "SECONDARY_TEXT": "#a86f86",
+            "VALID_ENTRY": "#d6ecc9",
+            "INVALID_ENTRY": "#f7c5c5",
+            "UPDATED_ROW": "#d6ecc9",
+            "FAILED_ROW": "#f7c5c5",
+            "PROGRESSBAR": {"TROUGH": "#ffe0ec"},
+        },
+        "no_cover": "assets/no_cover_sakura.png",
+    },
+    "E-Ink": {
+        "display_name": "E-INK",
+        "accent": "#2b2b2b",
+        "labels": {"STOP": "STOP", "LEAVE": "CLOSE"},
+        "colors": {
+            "BACKGROUND": "#f4f3ee",
+            "SECONDARY_BACKGROUND": "#e7e5dd",
+            "BORDER": "#4a4a4a",
+            "TEXT": "#1a1a1a",
+            "SECONDARY_TEXT": "#6b6b6b",
+            "VALID_ENTRY": "#dfe6df",
+            "INVALID_ENTRY": "#efd9d9",
+            "UPDATED_ROW": "#dfe6df",
+            "FAILED_ROW": "#efd9d9",
+            "PROGRESSBAR": {"TROUGH": "#e7e5dd"},
+        },
+        "no_cover": "assets/no_cover_eink.png",
+    },
+}
+
+SKIN_SETTINGS_KEY = "skin"
+
+
+def _read_settings_dict():
+    """Read the whole settings JSON as a dict (empty dict on any failure)."""
+    try:
+        if os.path.exists(SETTINGS_FILE):
+            with open(SETTINGS_FILE, "r") as f:
+                return json.load(f)
+    except Exception:
+        pass
+    return {}
+
+
+def load_skin_name():
+    """Return the saved skin name, defaulting to 'Default'."""
+    name = _read_settings_dict().get(SKIN_SETTINGS_KEY, "Default")
+    return name if name in SKINS else "Default"
+
+
+def save_skin_name(name):
+    """Persist the chosen skin name into settings JSON (preserving other keys)."""
+    data = _read_settings_dict()
+    data[SKIN_SETTINGS_KEY] = name
+    try:
+        with open(SETTINGS_FILE, "w") as f:
+            json.dump(data, f, indent=4)
+        return True
+    except Exception as e:
+        print(f"Error saving skin setting: {e}")
+        return False
+
+
+def _contrast_text(hex_color):
+    """Return black-ish or white (whichever is more readable) over hex_color."""
+    try:
+        h = hex_color.lstrip("#")
+        r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+        luminance = 0.299 * r + 0.587 * g + 0.114 * b
+        return "#1a1a1a" if luminance > 140 else "#ffffff"
+    except Exception:
+        return "#ffffff"
+
+
+def apply_skin(name):
+    """Overlay a skin's colors/font/no-cover onto Config (in place).
+
+    Starts from a clean Default palette so no stale keys survive a switch;
+    then overlays the chosen skin's values. Unspecified keys fall back to
+    Default. Called once at startup.
+    """
+    skin = SKINS.get(name, _DEFAULT_SKIN)
+    merged = _copy.deepcopy(_DEFAULT_SKIN["colors"])
+    for k, v in skin.get("colors", {}).items():
+        if isinstance(v, dict) and isinstance(merged.get(k), dict):
+            merged[k].update(v)
+        else:
+            merged[k] = v
+    # Expose the skin's accent (its Pantone) + a readable text color on it so
+    # ttk styles can actually USE it (e.g. selected rows) -- not just previews.
+    accent = skin.get("accent") or _DEFAULT_SKIN.get("accent") or "#990000"
+    merged["ACCENT"] = accent
+    merged["ACCENT_TEXT"] = skin.get("accent_text") or _contrast_text(accent)
+    Config.COLORS = merged
+    Config.STYLES["CUSTOM_FONT"] = dict(skin.get("font", _DEFAULT_SKIN["font"]))
+    Config.ALBUM_ART["DEFAULT_IMAGE"] = skin.get("no_cover", _DEFAULT_SKIN["no_cover"])
+    # Optional per-skin button label overrides (e.g. STOP -> HALT).
+    Config.LABELS = skin.get("labels", {})
+
+
+def skin_label(text):
+    """Return the active skin's label override for `text`, or `text` unchanged."""
+    return getattr(Config, "LABELS", {}).get(text, text)
+
+
+# Currently active skin name; apply it immediately so downstream style
+# building (in main.py) reads the skinned values.
+ACTIVE_SKIN = load_skin_name()
+apply_skin(ACTIVE_SKIN)
+
+

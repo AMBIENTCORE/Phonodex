@@ -1,5 +1,6 @@
 from tkinter import filedialog, ttk, StringVar, IntVar, font, BooleanVar, messagebox
 import os
+import sys
 import shutil
 import mutagen
 import requests
@@ -8,7 +9,7 @@ import subprocess
 import platform
 from tkinterdnd2 import DND_FILES, TkinterDnD
 import threading
-from config import Config, folder_format, DEFAULT_FOLDER_FORMAT
+from config import Config, folder_format, DEFAULT_FOLDER_FORMAT, SKINS, ACTIVE_SKIN, save_skin_name, skin_label
 from utils.logging import logger, log_message, autohide_scrollbar
 from utils.file_operations import (resource_path, select_files as file_ops_select_files, 
                                  select_folder as file_ops_select_folder, handle_drop as file_ops_handle_drop, 
@@ -21,11 +22,18 @@ from utils.image_handling import (copy_image_to_clipboard,
 from utils.metadata import (
     get_tag_value, set_tag_value,
     fetch_metadata as metadata_fetch_metadata, update_album_metadata,
-    album_catalog_cache, cache_lock, update_mp3_metadata as metadata_update_mp3_metadata
+    album_catalog_cache, cache_lock, update_mp3_metadata as metadata_update_mp3_metadata,
+    identify_release, fetch_release_details, build_track_suggestion,
+    apply_release_suggestion, has_embedded_art, _download_cover_bytes,
+)
+from utils.matching import (
+    normalize as _norm_text, extract_year as _extract_year,
+    extract_track_number as _extract_track_number, parse_filename as _parse_filename,
 )
 from services.api_client import save_api_key
 import hashlib
 from ui.dialogs import show_folder_format_dialog, show_move_confirmation_dialog
+from ui.review_dialog import show_review_dialog
 from utils.table_operations import (
     auto_adjust_column_widths, 
     treeview_sort_column, 
@@ -192,6 +200,53 @@ except Exception as e:
 # Configure all styles
 configure_styles(style, custom_font)
 
+# --- Skins ---
+# Pre-register every skin's chrome font so the Skins dialog can preview each
+# skin's name in its own typeface. The active skin's font is already loaded
+# above; this registers the rest and maps skin name -> tk font family.
+skin_preview_fonts = {}
+for _skin_name, _skin_def in SKINS.items():
+    try:
+        _fam = _skin_def["font"]["FAMILY"]
+        _ffile = resource_path(_skin_def["font"]["FILE"])
+        if _fam not in font.families():
+            if not _register_private_font(_ffile):
+                try:
+                    app.tk.call('tk', 'fontCreate', _fam, '-file', _ffile)
+                except Exception:
+                    pass
+        skin_preview_fonts[_skin_name] = _fam
+    except Exception:
+        skin_preview_fonts[_skin_name] = family_name
+
+
+def _restart_app():
+    """Relaunch the application (used after switching skins)."""
+    try:
+        app.destroy()
+    except Exception:
+        pass
+    try:
+        if getattr(sys, 'frozen', False):
+            subprocess.Popen([sys.executable])
+        else:
+            subprocess.Popen([sys.executable] + sys.argv)
+    finally:
+        sys.exit(0)
+
+
+def open_skins_dialog():
+    """Open the skin picker; applying a skin saves it and restarts the app."""
+    from ui.skins_dialog import show_skins_dialog
+
+    def _apply(skin_name):
+        if skin_name == ACTIVE_SKIN:
+            return
+        if save_skin_name(skin_name):
+            _restart_app()
+
+    show_skins_dialog(app, ACTIVE_SKIN, skin_preview_fonts, _apply)
+
 # Variables
 api_key_var = StringVar(value=DISCOGS_API_TOKEN)
 save_art_var = BooleanVar(value=True)  # Default to True
@@ -254,7 +309,7 @@ for button_text, command in [
 ]:
     button = create_styled_button(
         buttons_subframe, 
-        button_text, 
+        skin_label(button_text), 
         command, 
         is_danger=(button_text == "LEAVE")
     )
@@ -294,63 +349,84 @@ save_button.pack(side="left", padx=(Config.PADDING["SMALL"], 0))
 # this file (name resolution happens on click, not at button creation).
 # ---------------------------------------------------------------------------
 process_export_subframe = ttk.Frame(left_panel)
-process_export_subframe.pack(fill="x", pady=(5, 0), padx=10)
-create_button_pair(
-    process_export_subframe,
-    "PROCESS", lambda: start_processing(),
-    "EXPORT", lambda: organize_to_collection(),
+# NOTE: packed later (side="bottom") with the maintenance cluster so all the
+# action buttons sit together at the bottom of the left panel.
+#
+# Laid out as a 2x2 grid so the primary actions read:
+#     SMART PROCESS | PROCESS (v)
+#     SCAN GENRES   | EXPORT
+# Both columns share equal width (uniform) so the two rows line up.
+process_export_subframe.columnconfigure(0, weight=1, uniform="batch")
+process_export_subframe.columnconfigure(1, weight=1, uniform="batch")
+
+# SMART PROCESS: the overhauled "identify & tag" flow -- searches Discogs from
+# whatever tags exist, then opens a review dialog to accept/reject each
+# suggestion before anything is written. (lambda defers name lookup until
+# click time, like the other action buttons whose functions are defined later.)
+smart_process_button = create_styled_button(
+    process_export_subframe, "SMART PROCESS", lambda: start_smart_processing()
 )
+smart_process_button.grid(row=0, column=0, sticky="ew", padx=(0, 2), pady=(0, 2))
 
-# Save-metadata option toggles that gate what EXPORT (organize_to_collection)
-# writes: cover art, year, catalog number. Rendered as flat pixel-font
-# toggle buttons (indicatoron=False) instead of default tk.Checkbutton
-# widgets -- the OS checkbox chrome clashed with the sidepane aesthetic.
-# fg is swapped between TEXT (on) and SECONDARY_TEXT (off) so the state
-# reads clearly on dark backgrounds where raised/sunken relief is subtle.
-checkbox_subframe = ttk.Frame(left_panel)
-checkbox_subframe.pack(fill="x", pady=(3, 0), padx=10)
+# PROCESS runs immediately using the current write options (Art / Year /
+# Catalog -- all enabled by default). It shares its grid cell with a small
+# caret that opens a dropdown checklist to toggle those options.
+process_cell = ttk.Frame(process_export_subframe)
+process_cell.grid(row=0, column=1, sticky="ew", pady=(0, 2))
+process_button = create_styled_button(
+    process_cell, "PROCESS", lambda: start_processing()
+)
+process_button.pack(side="left", fill="x", expand=True)
 
-_write_label = tk.Label(checkbox_subframe, text="WRITE:", anchor="w")
-style_label(_write_label, use_smaller_font=True)
-_write_label.pack(side="left", padx=(0, 4))
+# Write-options dropdown: native checkable menu bound to the existing vars.
+write_options_menu = tk.Menu(
+    process_export_subframe,
+    tearoff=0,
+    bg=Config.COLORS["SECONDARY_BACKGROUND"],
+    fg=Config.COLORS["TEXT"],
+    activebackground=Config.COLORS["BORDER"],
+    activeforeground=Config.COLORS["TEXT"],
+    selectcolor=Config.COLORS["TEXT"],
+    font=("Consolas", 9),
+    bd=0,
+)
+write_options_menu.add_checkbutton(label="Art", variable=save_art_var)
+write_options_menu.add_checkbutton(label="Year", variable=save_year_var)
+write_options_menu.add_checkbutton(label="Catalog", variable=save_catalog_var)
 
 
-def _apply_toggle_visual(btn, var):
-    """Brighten the button text when its BooleanVar is True, dim it otherwise."""
-    btn.configure(fg=Config.COLORS["TEXT"] if var.get() else Config.COLORS["SECONDARY_TEXT"])
+def _show_write_options(event=None):
+    """Pop the write-options checklist just below the caret button."""
+    x = write_caret_button.winfo_rootx()
+    y = write_caret_button.winfo_rooty() + write_caret_button.winfo_height()
+    try:
+        write_options_menu.tk_popup(x, y)
+    finally:
+        write_options_menu.grab_release()
 
 
-for _cb_text, _cb_var in (
-    ("ART", save_art_var),
-    ("YEAR", save_year_var),
-    ("CATALOG", save_catalog_var),
-):
-    _cb = tk.Checkbutton(
-        checkbox_subframe,
-        text=_cb_text,
-        variable=_cb_var,
-        indicatoron=False,
-        font=custom_font,
-        bg=Config.COLORS["BACKGROUND"],
-        fg=Config.COLORS["SECONDARY_TEXT"],
-        selectcolor=Config.COLORS["SECONDARY_BACKGROUND"],
-        activebackground=Config.COLORS["SECONDARY_BACKGROUND"],
-        activeforeground=Config.COLORS["TEXT"],
-        borderwidth=1,
-        relief="solid",
-        padx=6,
-        pady=2,
-    )
-    # Bind the visual refresh to the button's own click callback. Late-bound
-    # b/v defaults capture the current iteration's widget + var.
-    _cb.configure(command=lambda b=_cb, v=_cb_var: _apply_toggle_visual(b, v))
-    _apply_toggle_visual(_cb, _cb_var)  # initial dim/bright state
-    _cb.pack(side="left", fill="x", expand=True, padx=1)
+write_caret_button = create_styled_button(process_cell, "\u25be", _show_write_options)
+# Use a system font for the caret glyph (the pixel font lacks the triangle).
+write_caret_button.configure(width=2, font=("Segoe UI Symbol", 9))
+write_caret_button.pack(side="left", padx=(2, 0))
+
+# SCAN GENRES: scan a folder and merge its genre tags into genres.txt so the
+# sidepane autocomplete picks them up. (Moved up from the maintenance cluster
+# so it sits with the other batch actions.)
+update_dictionary_button = create_styled_button(
+    process_export_subframe, "SCAN GENRES", lambda: update_genre_dictionary_from_folder()
+)
+update_dictionary_button.grid(row=1, column=0, sticky="ew", padx=(0, 2))
+
+export_button = create_styled_button(
+    process_export_subframe, "EXPORT", lambda: organize_to_collection()
+)
+export_button.grid(row=1, column=1, sticky="ew")
 
 stop_button = create_styled_button(
-    left_panel, "STOP", lambda: stop_processing_files(), is_danger=True
+    left_panel, skin_label("STOP"), lambda: stop_processing_files(), is_danger=True
 )
-stop_button.pack(fill="x", padx=10, pady=(3, 0))
+# Packed later (side="bottom") with the bottom action cluster.
 
 # Basic Fields Section (Now as a direct child of left_panel)
 basic_fields_subframe = ttk.Frame(left_panel, style='TFrame', borderwidth=0)
@@ -1284,8 +1360,16 @@ top_frame.pack(side="bottom", fill="x", padx=Config.PADDING["DEFAULT"], pady=(0,
 status_frame = ttk.Frame(top_frame)
 status_frame.pack(fill="x")
 
+# SKINS button lives to the RIGHT of both bars, spanning them. Pack it first
+# so it hugs the right edge; the bars column then fills the remaining space.
+skins_button = create_styled_button(status_frame, "SKINS", open_skins_dialog)
+skins_button.pack(side="right", fill="y", padx=(Config.PADDING["SMALL"], 0))
+
+bars_frame = ttk.Frame(status_frame)
+bars_frame.pack(side="left", fill="x", expand=True)
+
 # API calls progress bar
-api_bar_container = ttk.Frame(status_frame)
+api_bar_container = ttk.Frame(bars_frame)
 api_bar_container.pack(fill="x", pady=(Config.PADDING["SMALL"], 0))
 
 api_progress_var = IntVar()
@@ -1304,7 +1388,7 @@ api_end_label = ttk.Label(api_bar_container, text=str(Config.MAX_API_CALLS_PER_M
 api_end_label.pack(side="left", padx=(2, 0))
 
 # File processing progress bar
-file_bar_container = ttk.Frame(status_frame)
+file_bar_container = ttk.Frame(bars_frame)
 file_bar_container.pack(fill="x", pady=Config.PADDING["SMALL"])
 
 progress_var = IntVar()
@@ -1868,6 +1952,314 @@ def process_files():
                 break
     
     log_message("[DEBUG] Finished processing selected files.", log_type="debug")
+
+
+# ---------------------------------------------------------------------------
+# Smart processing ("identify & tag") — the overhauled flow (SMART PROCESS button).
+#
+# Kept entirely separate from PROCESS/process_files above (which enriches
+# existing tags in place). This flow identifies the Discogs release from
+# whatever tags exist, gathers per-file suggestions, and opens a review dialog
+# where the user accepts/rejects each change before anything is written.
+# ---------------------------------------------------------------------------
+
+# Text fields the smart tagger can propose (album art is handled separately).
+_SMART_TEXT_FIELDS = ["artist", "title", "album", "albumartist",
+                      "tracknumber", "year", "catalognumber"]
+
+
+def _smart_api_before():
+    """Rate-limit gate + progress tick before each Discogs call (worker thread)."""
+    if not enforce_api_limit():
+        return False
+    update_api_progress("start", verbose=False)
+    return True
+
+
+def _smart_api_after(headers):
+    """Reconcile the rate-limit UI after each Discogs call."""
+    if headers:
+        update_rate_limits_from_headers(headers, update_progress=True, verbose=False)
+    else:
+        update_api_progress("complete", verbose=False)
+
+
+_smart_api_hooks = {"before": _smart_api_before, "after": _smart_api_after}
+
+
+def _read_known_tags(file_path):
+    """Read the tags relevant to matching; parse the filename as a fallback when
+    artist/album/title are all empty. Returns (known_dict, has_art)."""
+    audio = get_audio_file(file_path)
+    known = {field: "" for field in _SMART_TEXT_FIELDS}
+    has_art = False
+    if audio:
+        known = {
+            "artist": get_tag_value(audio, "artist"),
+            "title": get_tag_value(audio, "title"),
+            "album": get_tag_value(audio, "album"),
+            "albumartist": get_tag_value(audio, "albumartist"),
+            "tracknumber": get_tag_value(audio, "tracknumber"),
+            "year": get_tag_value(audio, "date"),
+            "catalognumber": get_tag_value(audio, "catalognumber"),
+        }
+        has_art = has_embedded_art(audio)
+    if not (known.get("artist") or known.get("album") or known.get("title")):
+        parsed = _parse_filename(file_path)
+        for key in ("artist", "title", "album", "tracknumber"):
+            if not known.get(key) and parsed.get(key):
+                known[key] = parsed[key]
+    return known, has_art
+
+
+def _build_smart_filerec(file_path, known, has_art, suggestion):
+    """Compute changes/display/accept for one file per the overwrite policy:
+    empty field + suggestion -> pre-checked; differing non-empty value ->
+    unchecked; identical value -> not shown."""
+    changes, display, accept = [], {}, {}
+    for field in _SMART_TEXT_FIELDS:
+        sug = str((suggestion or {}).get(field, "") or "").strip()
+        if not sug:
+            continue
+        cur = str(known.get(field, "") or "").strip()
+        if field == "year":
+            if not _extract_year(sug):
+                continue
+            equal = _extract_year(cur) == _extract_year(sug)
+        elif field == "tracknumber":
+            if not _extract_track_number(sug):
+                continue
+            equal = _extract_track_number(cur) == _extract_track_number(sug)
+        else:
+            equal = (cur != "" and _norm_text(cur) == _norm_text(sug))
+        if equal:
+            continue
+        changes.append(field)
+        display[field] = (cur if cur else "(empty)", sug)
+        accept[field] = (cur == "")  # fill blanks by default; opt in to overwrites
+
+    if suggestion and (suggestion.get("cover_image") or suggestion.get("thumb")):
+        changes.append("art")
+        display["art"] = ("present" if has_art else "(none)", "embed cover")
+        accept["art"] = (not has_art)
+
+    return {
+        "file_path": file_path,
+        "suggestion": suggestion or {},
+        "changes": changes,
+        "display": display,
+        "accept": accept,
+    }
+
+
+def _smart_group_display_name(rep, candidates, selected_index=0):
+    """Human label for an album group in the review dialog."""
+    if candidates:
+        cand = candidates[selected_index]
+        title = (cand.get("title") or
+                 f"{cand.get('artist', '')} - {cand.get('album', '')}").strip(" -")
+        return title or "(unknown release)"
+    album_artist = rep.get("albumartist") or rep.get("artist") or "Unknown Artist"
+    album = rep.get("album") or rep.get("title") or "Unknown Album"
+    return f"{album_artist} - {album}"
+
+
+def start_smart_processing():
+    """Kick off the identify & tag flow for the selected files (background thread)."""
+    global stop_processing
+    if not DISCOGS_API_TOKEN:
+        log_message("[ERROR] API Key is required for release matching.", log_type="processing")
+        return
+    selected_items = file_table.selection()
+    if not selected_items:
+        log_message("[ERROR] No files selected for processing", log_type="processing")
+        return
+    selected_files = []
+    for item in selected_items:
+        values = file_table.item(item)['values']
+        if len(values) >= 9:
+            file_path = values[8]
+            if file_path and os.path.exists(file_path):
+                selected_files.append(file_path)
+    if not selected_files:
+        log_message("[ERROR] No valid files selected.", log_type="processing")
+        return
+    stop_processing = False
+    file_count_var.set(f"{len(selected_files)}/{len(file_list)}")
+    thread = threading.Thread(target=gather_release_suggestions, args=(selected_files,))
+    thread.daemon = True
+    thread.start()
+
+
+def gather_release_suggestions(selected_files):
+    """Worker: identify releases + build per-file suggestions, then open review."""
+    log_message("[SMART] Identifying releases for selected files...", log_type="processing")
+
+    known_map, art_map = {}, {}
+    for file_path in selected_files:
+        known, has_art = _read_known_tags(file_path)
+        known_map[file_path] = known
+        art_map[file_path] = has_art
+
+    # Group by album; files without an album tag are identified individually.
+    groups_by_key, order = {}, []
+    for file_path in selected_files:
+        known = known_map[file_path]
+        album = (known.get("album") or "").strip().lower()
+        album_artist = (known.get("albumartist") or "").strip().lower()
+        if album:
+            # Compilations typically have NO album artist and a different artist
+            # per track, so keying on the per-track artist would shatter one
+            # release into a group per artist (and match each to its own Discogs
+            # release). Use the album artist only when present; otherwise fall
+            # back to the containing folder so every track of one release stays
+            # in a single group.
+            qualifier = album_artist or os.path.normcase(os.path.dirname(file_path))
+            key = f"{qualifier}|{album}"
+        else:
+            key = f"__single__|{file_path}"
+        if key not in groups_by_key:
+            groups_by_key[key] = []
+            order.append(key)
+        groups_by_key[key].append(file_path)
+
+    groups = []
+    total = len(selected_files)
+    done = 0
+
+    for key in order:
+        if stop_processing:
+            log_message("[SMART] Stopped by user.", log_type="processing")
+            update_progress_bar(0, "file")
+            return
+        files = groups_by_key[key]
+        rep = dict(known_map[files[0]])
+        if len(files) > 1:
+            rep["title"] = ""  # a shared album shouldn't be biased by one track title
+            # When the grouped tracks have differing artists it's a compilation;
+            # don't let the first track's artist bias the search or scoring. Treat
+            # it as "Various" so identify matches the release, not one contributor.
+            distinct_artists = {(known_map[fp].get("artist") or "").strip().lower()
+                                for fp in files}
+            distinct_artists.discard("")
+            if len(distinct_artists) > 1:
+                rep["artist"] = ""
+                rep["albumartist"] = rep.get("albumartist") or "Various"
+
+        candidates, _headers = identify_release(
+            rep, DISCOGS_API_TOKEN, Config.DISCOGS_SEARCH_URL, request_hooks=_smart_api_hooks
+        )
+        release_data = None
+        selected_index = 0
+        if candidates:
+            # Use the best search-score match (top candidate) and fetch its
+            # full release details for the per-file track mapping.
+            release_data, _ = fetch_release_details(
+                candidates[0]["id"], DISCOGS_API_TOKEN, Config.DISCOGS_SEARCH_URL,
+                request_hooks=_smart_api_hooks
+            )
+
+        filerecs = []
+        for file_path in files:
+            done += 1
+            if total:
+                update_progress_bar(int(done / total * 100), "file")
+            known = known_map[file_path]
+            suggestion = {}
+            if candidates:
+                suggestion = build_track_suggestion(
+                    known, candidates[selected_index], release_data,
+                    DISCOGS_API_TOKEN, Config.DISCOGS_SEARCH_URL
+                )
+            filerecs.append(_build_smart_filerec(file_path, known, art_map[file_path], suggestion))
+
+        groups.append({
+            "album_key": key,
+            "display_name": _smart_group_display_name(rep, candidates, selected_index),
+            "candidates": candidates,
+            "selected_index": selected_index,
+            "release_data": release_data,
+            "files": filerecs,
+        })
+
+    update_progress_bar(0, "file")
+    if not groups:
+        log_message("[SMART] Nothing to review.", log_type="processing")
+        return
+    log_message(f"[SMART] Prepared {len(groups)} album group(s) for review.", log_type="processing")
+    app.after(0, lambda: _open_review_dialog(groups))
+
+
+def _load_thumb_bytes(url):
+    """Download cover bytes for the review preview (cached)."""
+    if not url:
+        return None
+    data, _mime = _download_cover_bytes(url, DISCOGS_API_TOKEN)
+    return data
+
+
+def _rematch_group(group, candidate_index):
+    """Rebuild a group's suggestions for a different release (dialog worker thread)."""
+    candidates = group["candidates"]
+    if candidate_index < 0 or candidate_index >= len(candidates):
+        return False
+    group["selected_index"] = candidate_index
+    candidate = candidates[candidate_index]
+    release_data, _ = fetch_release_details(
+        candidate["id"], DISCOGS_API_TOKEN, Config.DISCOGS_SEARCH_URL,
+        request_hooks=_smart_api_hooks
+    )
+    group["release_data"] = release_data
+    for filerec in group["files"]:
+        known, has_art = _read_known_tags(filerec["file_path"])
+        suggestion = build_track_suggestion(
+            known, candidate, release_data, DISCOGS_API_TOKEN, Config.DISCOGS_SEARCH_URL
+        )
+        rebuilt = _build_smart_filerec(filerec["file_path"], known, has_art, suggestion)
+        filerec["suggestion"] = rebuilt["suggestion"]
+        filerec["changes"] = rebuilt["changes"]
+        filerec["display"] = rebuilt["display"]
+        filerec["accept"] = rebuilt["accept"]
+    return True
+
+
+def _open_review_dialog(groups):
+    """Open the review dialog on the main thread."""
+    show_review_dialog(
+        app, custom_font, groups,
+        on_confirm=_write_review_results,
+        on_rematch=_rematch_group,
+        load_thumb=_load_thumb_bytes,
+    )
+
+
+def _write_review_results(groups):
+    """Write the accepted fields for every reviewed file, then refresh the table."""
+    callbacks = {
+        'log_message': log_message,
+        'mark_updated': lambda path: updated_files.add(path),
+        'mark_processed': lambda path: processed_files.add(path),
+    }
+    written = 0
+    touched = []
+    for group in groups:
+        for filerec in group["files"]:
+            accept = filerec["accept"]
+            if not any(accept.get(field) for field in filerec["changes"]):
+                continue
+            touched.append(filerec["file_path"])
+            if apply_release_suggestion(
+                filerec["file_path"], filerec["suggestion"], accept,
+                api_token=DISCOGS_API_TOKEN, callbacks=callbacks
+            ):
+                written += 1
+
+    # Drop cached metadata for changed files so the table re-reads fresh values.
+    for file_path in touched:
+        file_metadata_cache.pop(file_path, None)
+    update_table()
+    log_message(f"[SMART] Wrote changes to {written} file(s).", log_type="processing")
+
 
 def start_editing(event):
     """Start editing a cell when double-clicked."""
@@ -2643,7 +3035,7 @@ def apply_basic_fields():
 try:
     # Create a container for the Clear buttons - side by side
     buttons_container = ttk.Frame(left_panel)
-    buttons_container.pack(side="bottom", fill="x", padx=10, pady=(0, 5))
+    buttons_container.pack(side="bottom", fill="x", padx=10, pady=(2, 5))
 
     # Use lambda functions to delay the lookup of the functions until they're clicked
     create_button_pair(
@@ -2656,23 +3048,24 @@ try:
 except Exception as e:
     log_message(f"[ERROR] Failed to add clear buttons: {str(e)}")
 
-# Genre dictionary maintenance: scan a folder and merge its genre tags into
-# genres.txt so the sidepane autocomplete picks them up.
-update_dictionary_button = create_styled_button(
-    left_panel, "SCAN GENRES", lambda: update_genre_dictionary_from_folder()
-)
-update_dictionary_button.pack(side="bottom", fill="x", padx=10, pady=(0, 5))
-
 # Table maintenance pair: REFRESH re-reads tags for the loaded list;
-# REMOVE SELECTED drops the highlighted rows. Grouped just above SCAN
-# GENRES and CLEAR since all four are non-editing utility actions.
+# REMOVE SELECTED drops the highlighted rows. Grouped just above CLEAR since
+# these are non-editing utility actions. (SCAN GENRES moved up into the
+# batch-action grid alongside SMART PROCESS / PROCESS / EXPORT.)
 maintenance_subframe = ttk.Frame(left_panel)
-maintenance_subframe.pack(side="bottom", fill="x", padx=10, pady=(0, 5))
+maintenance_subframe.pack(side="bottom", fill="x", padx=10, pady=(10, 0))
 create_button_pair(
     maintenance_subframe,
     "REFRESH", lambda: refresh_file_list(),
     "REMOVE", lambda: remove_selected_items(),
 )
+
+# Batch-action group relocated to the bottom cluster so every action button
+# lives together. Packed side="bottom" in reverse order so the cluster reads,
+# top -> bottom: the batch grid (SMART PROCESS / PROCESS / SCAN GENRES /
+# EXPORT), STOP, then REFRESH/REMOVE, then CLEAR.
+stop_button.pack(side="bottom", fill="x", padx=10, pady=(3, 0))
+process_export_subframe.pack(side="bottom", fill="x", padx=10, pady=(10, 0))
 
 # Note: the old "processing log" widget that lived here was removed --
 # its routing was misdesigned (most log_type="processing" callers were

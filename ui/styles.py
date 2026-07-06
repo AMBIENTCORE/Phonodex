@@ -139,6 +139,10 @@ def configure_styles(style, custom_font):
                    darkcolor=Config.COLORS["BORDER"],
                    borderwidth=1,
                    relief='solid')
+    # Selected-row highlight uses the active skin's accent color.
+    style.map('Treeview',
+              background=[('selected', Config.COLORS.get("ACCENT", Config.COLORS["SECONDARY_BACKGROUND"]))],
+              foreground=[('selected', Config.COLORS.get("ACCENT_TEXT", Config.COLORS["TEXT"]))])
     style.configure('Treeview.Heading', 
                    font=('Consolas', Config.FONTS["TABLE_HEADING_SIZE"], 'bold'),
                    background=Config.COLORS["BACKGROUND"],
