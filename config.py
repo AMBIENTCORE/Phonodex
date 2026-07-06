@@ -67,7 +67,7 @@ class Config:
     # for the "check for updates" comparison against GitHub Releases.
     # Bump both this and Phonodex.iss (plus OutputBaseFilename) on every
     # release.
-    APP_VERSION = "1.1"
+    APP_VERSION = "1.2"
 
     # API Configuration
     DISCOGS_SEARCH_URL = "https://api.discogs.com/database/search"
