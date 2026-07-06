@@ -228,7 +228,19 @@ def _restart_app():
         pass
     try:
         if getattr(sys, 'frozen', False):
-            subprocess.Popen([sys.executable])
+            # PyInstaller onefile: a relaunched copy of ourselves inherits the
+            # bootloader's environment (_MEIPASS2 on PyInstaller <=5, _PYI_* on
+            # 6+). Those tell the child bootloader to REUSE the parent's temp
+            # extraction dir -- the very dir the exiting parent then deletes. That
+            # race corrupts the child's startup (e.g. "ImportError: cannot import
+            # name '_imaging' from 'PIL'") and leaves an undeletable _MEIxxxx
+            # folder ("Failed to remove temporary directory"). Strip those vars so
+            # the child does a clean, independent extraction into its own dir.
+            env = dict(os.environ)
+            env.pop('_MEIPASS2', None)
+            for _k in [k for k in env if k.startswith('_PYI_')]:
+                env.pop(_k, None)
+            subprocess.Popen([sys.executable], env=env)
         else:
             subprocess.Popen([sys.executable] + sys.argv)
     finally:
