@@ -5,9 +5,13 @@ Provides functionality for image processing, conversion, and clipboard operation
 
 import io
 import os
+import sys
+import shutil
+import subprocess
 from PIL import Image, ImageTk, ImageGrab
-import win32clipboard
-import win32con
+if sys.platform == "win32":
+    import win32clipboard
+    import win32con
 from utils.logging import log_message
 from utils.file_operations import resource_path
 
@@ -30,6 +34,24 @@ def copy_image_to_clipboard(image_data):
     # PRIMARY METHOD: Store original image bytes for direct internal paste (lossless)
     _original_image_data = image_data
     log_message("[INFO] Stored original image bytes for lossless internal transfers")
+
+    if sys.platform != "win32":
+        if not shutil.which("xclip"):
+            log_message("[WARNING] Artwork copied for in-app paste only; install xclip for the Linux clipboard.")
+            return True
+        try:
+            with Image.open(io.BytesIO(image_data)) as image:
+                output = io.BytesIO()
+                image.save(output, "PNG")
+            subprocess.run(
+                ["xclip", "-selection", "clipboard", "-t", "image/png", "-i"],
+                input=output.getvalue(), stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL, check=True, timeout=5,
+            )
+            log_message("[INFO] Also placed artwork on the Linux clipboard")
+        except (OSError, ValueError, subprocess.SubprocessError) as error:
+            log_message(f"[WARNING] System clipboard copy failed; in-app paste is available: {error}")
+        return True
     
     # FALLBACK: Also place on system clipboard for external applications
     clipboard_opened = False
@@ -185,7 +207,17 @@ def paste_image_from_clipboard():
     
     # FALLBACK: Handle external clipboard data
     try:
-        img = ImageGrab.grabclipboard()
+        if sys.platform.startswith("linux"):
+            if not shutil.which("xclip"):
+                log_message("[WARNING] Install xclip to paste images from the Linux clipboard.")
+                return None
+            result = subprocess.run(
+                ["xclip", "-selection", "clipboard", "-t", "image/png", "-o"],
+                capture_output=True, check=True, timeout=5,
+            )
+            img = Image.open(io.BytesIO(result.stdout))
+        else:
+            img = ImageGrab.grabclipboard()
         if img is None:
             log_message("[COVER] No image found in clipboard", log_type="processing")
             return None
@@ -195,7 +227,7 @@ def paste_image_from_clipboard():
             return None
         
         # Process external clipboard image
-        if img.mode == 'RGBA':
+        if img.mode not in ('RGB', 'L'):
             img = img.convert('RGB')
             
         img_buffer = io.BytesIO()

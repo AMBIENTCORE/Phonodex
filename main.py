@@ -47,6 +47,7 @@ from ui.styles import (configure_styles, style_button, style_label, style_checkb
                       update_progress_bar_style, set_api_entry_style,
                       configure_table_columns, configure_table_tags, create_styled_button,
                       create_styled_entry, create_styled_text, create_button_pair)
+from utils.runtime import maximize_window
 
 
 # Cache and API rate limiter
@@ -108,7 +109,7 @@ app.minsize(*Config.MIN_WINDOW_SIZE)
 # on other platforms or if the .ico is missing.
 try:
     _icon_ico = resource_path("assets/phonodex.ico")
-    if os.path.exists(_icon_ico):
+    if sys.platform == "win32" and os.path.exists(_icon_ico):
         app.iconbitmap(default=_icon_ico)
     else:
         _icon_png = resource_path("assets/phonodex.png")
@@ -175,9 +176,17 @@ def _register_private_font(font_path):
             # kCTFontManagerScopeProcess = 1
             return bool(ct.CTFontManagerRegisterFontsForURL(url, 1, None))
         else:
-            # Linux: no portable per-process registration. Fall back to
-            # Tk's built-in loader below.
-            return False
+            import ctypes
+            from ctypes.util import find_library
+            library = find_library("fontconfig")
+            if not library:
+                return False
+            fc = ctypes.CDLL(library)
+            fc.FcConfigGetCurrent.restype = ctypes.c_void_p
+            fc.FcConfigAppFontAddFile.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
+            fc.FcConfigAppFontAddFile.restype = ctypes.c_int
+            return bool(fc.FcConfigAppFontAddFile(
+                fc.FcConfigGetCurrent(), os.fsencode(font_path)))
     except Exception:
         return False
 
@@ -241,6 +250,9 @@ def _restart_app():
             for _k in [k for k in env if k.startswith('_PYI_')]:
                 env.pop(_k, None)
             subprocess.Popen([sys.executable], env=env)
+        elif sys.platform.startswith("linux"):
+            # Keep the same PID so a container supervisor does not launch a second UI.
+            os.execv(sys.executable, [sys.executable] + sys.argv)
         else:
             subprocess.Popen([sys.executable] + sys.argv)
     finally:
@@ -1597,7 +1609,8 @@ file_table_context_menu = tk.Menu(file_table)
 configure_context_menu(file_table_context_menu)
 file_table_context_menu.add_command(label="Play Selected", command=lambda: play_selected_files())
 # Add the Show in Explorer option
-file_table_context_menu.add_command(label="Show in Explorer", command=lambda: show_in_explorer(), state="disabled")
+file_manager_label = "Show in Explorer" if sys.platform == "win32" else "Show in File Manager"
+file_table_context_menu.add_command(label=file_manager_label, command=lambda: show_in_explorer(), state="disabled")
 
 # Function to show file table context menu - update to check explorer menu state
 def show_file_table_context_menu(event):
@@ -1614,6 +1627,12 @@ file_table.bind("<Button-3>", show_file_table_context_menu)
 # Add the function to play selected files
 def play_selected_files():
     """Play selected files in the default music player."""
+    if Config.BROWSER_MODE:
+        messagebox.showinfo(
+            "Playback unavailable in browser mode",
+            "The browser desktop does not stream audio. Play the music on your computer or portable player.",
+        )
+        return
     selected_items = file_table.selection()
     if not selected_items:
         log_message("[ERROR] No files selected for playback", log_type="processing")
@@ -1654,11 +1673,12 @@ def play_selected_files():
             os.startfile(playlist_path)
             log_message(f"[SUCCESS] Playing {len(files_to_play)} files via playlist", log_type="processing")
         elif platform.system() == 'Darwin':  # macOS
-            subprocess.call(['open'] + files_to_play)
+            subprocess.run(['open'] + files_to_play, check=True, timeout=10)
             log_message(f"[SUCCESS] Playing {len(files_to_play)} files in table order", log_type="processing")
         else:  # Linux and others
-            subprocess.call(['xdg-open'] + files_to_play)
-            log_message(f"[SUCCESS] Playing {len(files_to_play)} files in table order", log_type="processing")
+            for file_path in files_to_play:
+                subprocess.run(['xdg-open', file_path], check=True, timeout=10)
+            log_message(f"[SUCCESS] Opened {len(files_to_play)} files in the default player", log_type="processing")
     except Exception as e:
         log_message(f"[ERROR] Failed to play files: {str(e)}", log_type="processing")
 
@@ -3339,7 +3359,7 @@ main_paned.configure(style='Dark.TPanedwindow')
 load_default_album_art()
 
 # Set the window to start maximized (windowed fullscreen)
-app.state('zoomed')  # For Windows systems
+maximize_window(app)
 
 def update_table():
     """Update the table with current file list and metadata."""
@@ -3564,7 +3584,7 @@ def clear_logs():
 
 # Add the function to open the folder in explorer
 def show_in_explorer():
-    """Open the folder containing the selected files in Windows Explorer."""
+    """Open the folder containing the selected files in the platform file manager."""
     selected_items = file_table.selection()
     if not selected_items:
         log_message("[ERROR] No files selected to show in explorer", log_type="processing")
@@ -3592,9 +3612,9 @@ def show_in_explorer():
             if platform.system() == 'Windows':
                 os.startfile(directory)
             elif platform.system() == 'Darwin':  # macOS
-                subprocess.call(['open', directory])
+                subprocess.run(['open', directory], check=True, timeout=10)
             else:  # Linux and others
-                subprocess.call(['xdg-open', directory])
+                subprocess.run(['xdg-open', directory], check=True, timeout=10)
             
             log_message(f"[SUCCESS] Opened folder: {directory}", log_type="processing")
         except Exception as e:
@@ -3608,7 +3628,7 @@ def update_explorer_menu_state():
     selected_items = file_table.selection()
     
     # Default to disabled
-    file_table_context_menu.entryconfig("Show in Explorer", state="disabled")
+    file_table_context_menu.entryconfig(file_manager_label, state="disabled")
     
     if not selected_items:
         return
@@ -3629,6 +3649,6 @@ def update_explorer_menu_state():
     
     # Enable if all files are in the same directory
     if len(directories) == 1:
-        file_table_context_menu.entryconfig("Show in Explorer", state="normal")
+        file_table_context_menu.entryconfig(file_manager_label, state="normal")
 
 app.mainloop()

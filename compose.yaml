@@ -1,0 +1,46 @@
+services:
+  phonodex:
+    image: phonodex:local
+    build:
+      context: .
+      args:
+        PHONODEX_UID: ${PHONODEX_UID:-1000}
+        PHONODEX_GID: ${PHONODEX_GID:-1000}
+    # Rebuild after changing IDs. Existing volumes/binds must already be writable
+    # by these IDs; the entrypoint never chowns mounted files.
+    user: "${PHONODEX_UID:-1000}:${PHONODEX_GID:-1000}"
+    environment:
+      HOME: /config
+      PHONODEX_CONFIG_DIR: /config
+      PHONODEX_LIBRARY_DIR: /music
+      PHONODEX_BROWSER: "1"
+      PHONODEX_SCREEN: ${PHONODEX_SCREEN:-1920x1080x24}
+    ports:
+      # noVNC has no authentication. Opting into a LAN bind requires a trusted
+      # network or an authenticated TLS reverse proxy; never publish port 5900.
+      - "${PHONODEX_BIND_ADDRESS:-127.0.0.1}:${PHONODEX_PORT:-6080}:6080"
+    volumes:
+      - config:/config
+      - work:/work
+      - library:/music
+      # Optional read-only source (create the directory first):
+      # - ./input:/input:ro
+      # Tagging edits files in place: copy read-only input into /work first.
+      # Organizing can MOVE files from /work to /music, not make an export copy.
+      # To use host folders, REPLACE the work/library mounts above with:
+      # - ./work:/work
+      # - ./music:/music
+      # Prepare ownership/permissions on those folders for the configured IDs.
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    shm_size: 256mb
+    pids_limit: 128
+    restart: unless-stopped
+    stop_grace_period: 30s
+
+volumes:
+  config:
+  work:
+  library:

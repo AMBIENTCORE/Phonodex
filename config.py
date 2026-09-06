@@ -6,22 +6,15 @@ from pathlib import Path
 import json
 import os
 import sys
+from utils.runtime import user_data_directory, default_folder_format
 
 # Project root (directory containing this config.py).
 # Used for bundled read-only assets when running as a script.
 _PROJECT_ROOT = Path(__file__).resolve().parent
 
-# User-data root: where api_key.txt, folder_format_settings.json, etc. live.
-# When frozen by PyInstaller, store user data in the standard per-user
-# location (%LOCALAPPDATA%\Phonodex on Windows). This survives uninstalls,
-# works regardless of whether the app is installed to Program Files
-# (read-only) or AppData, and matches how other Windows apps behave.
-# When running as a plain script, keep files next to the project for
-# convenience during development.
-if getattr(sys, 'frozen', False):
-    _local_appdata = os.environ.get('LOCALAPPDATA') or os.path.expanduser('~')
-    _USER_DATA_ROOT = Path(_local_appdata) / "Phonodex"
-    _USER_DATA_ROOT.mkdir(parents=True, exist_ok=True)
+_USER_DATA_ROOT = user_data_directory(_PROJECT_ROOT, getattr(sys, "frozen", False))
+_USER_DATA_ROOT.mkdir(parents=True, exist_ok=True)
+if getattr(sys, 'frozen', False) and not os.environ.get("PHONODEX_CONFIG_DIR"):
     # One-time migration: if an old api_key.txt or settings file exists
     # next to the .exe (from previous app versions), move it into the
     # new location so the user doesn't have to re-enter their key.
@@ -34,14 +27,19 @@ if getattr(sys, 'frozen', False):
                 _new.write_bytes(_legacy.read_bytes())
             except Exception:
                 pass
-else:
-    _USER_DATA_ROOT = _PROJECT_ROOT
+
+# Seed new Linux/container profiles without replacing a user's genre dictionary.
+_genres_source = _PROJECT_ROOT / "genres.txt"
+_genres_target = _USER_DATA_ROOT / "genres.txt"
+if not _genres_target.exists() and _genres_source.exists():
+    import shutil
+    shutil.copyfile(_genres_source, _genres_target)
 
 # Default folder structure format
-DEFAULT_FOLDER_FORMAT = "D:\\Music\\Collection\\%genre%\\%year%\\[%catalognumber%] %albumartist% - %album%\\%artist% - %title%"
+DEFAULT_FOLDER_FORMAT = default_folder_format()
 folder_format = DEFAULT_FOLDER_FORMAT
 
-# Settings file path (anchored next to the exe when frozen, otherwise next to config.py)
+# All mutable settings use the same persistent directory.
 SETTINGS_FILE = str(_USER_DATA_ROOT / "folder_format_settings.json")
 
 def load_settings():
@@ -68,12 +66,13 @@ class Config:
     # Bump both this and Phonodex.iss (plus OutputBaseFilename) on every
     # release.
     APP_VERSION = "1.2"
+    BROWSER_MODE = os.environ.get("PHONODEX_BROWSER", "0") == "1"
 
     # API Configuration
     DISCOGS_SEARCH_URL = "https://api.discogs.com/database/search"
     API_KEY_FILE = _USER_DATA_ROOT / "api_key.txt"
     # Genre autocomplete dictionary (one genre per line; lines starting with # are comments).
-    # Location: %LOCALAPPDATA%\Phonodex\genres.txt when frozen, next to the project when run as script.
+    # Location follows PHONODEX_CONFIG_DIR or the platform's user-data directory.
     GENRES_FILE = _USER_DATA_ROOT / "genres.txt"
     API = {
         "RATE_LIMIT": 60,
@@ -346,6 +345,16 @@ def save_skin_name(name):
         return False
 
 
+def save_folder_format(format_string):
+    """Save the export format without discarding other preferences such as skin."""
+    global folder_format
+    data = _read_settings_dict()
+    data["folder_format"] = format_string
+    with open(SETTINGS_FILE, "w", encoding="utf-8") as settings:
+        json.dump(data, settings, indent=4)
+    folder_format = format_string
+
+
 def _contrast_text(hex_color):
     """Return black-ish or white (whichever is more readable) over hex_color."""
     try:
@@ -392,5 +401,4 @@ def skin_label(text):
 # building (in main.py) reads the skinned values.
 ACTIVE_SKIN = load_skin_name()
 apply_skin(ACTIVE_SKIN)
-
 

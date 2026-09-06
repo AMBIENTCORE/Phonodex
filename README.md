@@ -2,7 +2,9 @@
 
 ![image](assets/main.png)
 
-Currently compatible with **Windows only** (due to clipboard operations).
+Compatible with **Windows and Linux**, with an optional **Docker browser desktop**.
+The Windows installer remains unchanged. Linux and Docker run the Python source;
+Docker exposes the existing Tkinter interface through noVNC, not a separate web app.
 
 A desktop application for managing and organizing music file metadata.
 By having correct Artist and Title and/or Album, it can automatically fetch the Cover Art, Catalog Number and Year.
@@ -70,12 +72,13 @@ Phonodex ships with selectable **skins** (themes) that restyle the entire app â€
 - mutagen - Audio metadata handling
 - requests - API communication
 - Pillow - Album art image processing and display
-- pywin32 - Windows clipboard support for Album Art
+- pywin32 - Windows-only clipboard support for Album Art
+- xclip - optional Linux system image clipboard (included in Docker)
 
 
 ## Installation
 
-### Option A: Installer (recommended for most users)
+### Option A: Windows installer (recommended for Windows users)
 
 Download the latest installer from the [Releases page](https://github.com/AMBIENTCORE/Phonodex/releases/tag/1.0) and run it to install Phonodex like any other desktop app. No Python setup required â€” it creates Start menu and optional desktop shortcuts and can launch on finish.
 
@@ -101,19 +104,155 @@ pip install -r requirements.txt
 python main.py
 ```
 
+### Option C: Native Linux
+
+On Debian/Ubuntu, install the desktop dependencies and run from a virtual environment:
+
+```bash
+sudo apt-get update
+sudo apt-get install python3-venv python3-tk libfontconfig1 xclip xdg-utils
+python3 -m venv .venv
+. .venv/bin/activate
+pip install -r requirements.txt
+python main.py
+```
+
+Run this in a graphical X11 session (or a Wayland session with XWayland).
+`pywin32` is installed only on Windows. Artwork copy/paste within Phonodex also
+works without xclip; Linux system image copy/paste needs xclip.
+Opening files uses the desktop's configured file manager and audio player.
+
+### Option D: Docker with a browser GUI
+
+From a checkout of this repository, with Docker Engine and Docker Compose v2:
+
+```bash
+docker compose up --build -d
+docker compose ps
+```
+
+Open **http://127.0.0.1:6080/** and click **Connect**, or use
+http://127.0.0.1:6080/vnc.html?autoconnect=1&resize=scale.
+The container runs the same application with Xvfb, Openbox, x11vnc and noVNC.
+No Windows, Wine, host display server, privileged mode or Docker socket mount is required.
+The default build targets Linux and runs as UID/GID `1000:1000`.
+
+**There is no browser authentication in this image.** Compose binds only to
+localhost by default. To access a remote Docker host on a trusted LAN, explicitly
+set `PHONODEX_BIND_ADDRESS` to that host's LAN address before starting Compose.
+For remote/untrusted access, use a VPN or an authenticated HTTPS reverse proxy
+with WebSocket support. Anyone who can access the desktop can read and change
+its mounted files and saved token. Never forward this port directly to the Internet.
+Raw VNC listens only on loopback inside the container and is not published.
+
+#### Persistent folders and ownership
+
+| Container path | Purpose |
+| --- | --- |
+| `/config` | Token, settings, genre dictionary, desktop state; keep private and backed up |
+| `/work` | Writable working copies to import and tag |
+| `/music` | Organised collection/export destination |
+| `/input` (optional) | Read-only source files; copy to `/work` using the desktop file manager first |
+
+Compose creates named volumes for `/config`, `/work` and `/music`. They survive
+container replacement and `docker compose down`; **`down --volumes` deletes them**.
+Alternatively, replace the `/work` and `/music` volume entries in `compose.yaml`
+with your own host bind mounts. The commented `/input` example is read-only.
+Create bind-mount directories first and grant the configured user the access it
+needs. Phonodex never recursively changes ownership of your music.
+
+To use different IDs, set `PHONODEX_UID` and `PHONODEX_GID` before building, for example:
+
+```bash
+PHONODEX_UID=1001 PHONODEX_GID=1001 docker compose up --build -d
+```
+
+The build arguments create the corresponding non-root account, and Compose uses
+the same IDs at runtime. **Rebuild when changing IDs**; existing bind mounts and
+volumes must already be writable by the new IDs. Do not change the ownership of an
+existing shared library blindly; coordinate permissions with its other applications.
+Do not override the container user to root.
+
+Other Compose settings can be set in the environment or an untracked `.env` file:
+
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| `PHONODEX_BIND_ADDRESS` | `127.0.0.1` | Host interface to publish the browser port on |
+| `PHONODEX_PORT` | `6080` | Host browser port; container port stays 6080 |
+| `PHONODEX_SCREEN` | `1920x1080x24` | Virtual desktop size, minimum 1600x900, maximum 7680x4320, 24-bit colour |
+
+Enter the Discogs token in Phonodex itself; it is saved in `/config`, not in the
+Dockerfile or Compose file. Start with working copies of a small album.
+Metadata lookup sends search terms to Discogs and cover-art providers; it does not
+upload the audio files. No files are automatically tagged on startup.
+
+#### Alongside Nicotine in a Proxmox CT
+
+Run Phonodex as a **separate Docker container**, not as extra processes inside
+Nicotine's container. Docker must already work in the CT. Mount the desired
+Proxmox media folder into the CT using Proxmox's normal mount-point configuration,
+then use that **CT-visible path** as the source of the Docker bind mount.
+The Docker container cannot directly see a path that exists only on the Proxmox host.
+
+For unprivileged CTs, account for the CT's actual UID/GID mapping when granting
+host-folder permissions. Prefer a separate working directory for Phonodex so it
+does not rewrite or move active downloads. Neither a privileged CT nor disabling
+AppArmor is required by this image; nested Docker support is the host administrator's responsibility.
+Use a different published port from Nicotine and keep their `/config` volumes separate.
+
+#### Browser limitations and operation
+
+- This is one shared desktop session, not a multi-user web application.
+- File dialogs browse the container's mounted files. Dragging files from your PC
+  onto the browser does not upload them. Drag/drop within the remote desktop works.
+- Artwork copy/paste inside Phonodex and the Linux desktop is supported.
+  noVNC's browser clipboard is text-only; browser-to-desktop image paste is not supported.
+- Audio playback is not streamed through noVNC; use your local player.
+- Skin changes restart the application in place without creating a second GUI.
+- Closing Phonodex shuts down the desktop stack. With the Compose restart policy,
+  it will reopen; use `docker compose stop` to stop it intentionally.
+
+The health check requires the actual Phonodex process/window and the HTTP/VNC
+services, not merely a reachable HTML page. A required-process crash stops the
+stack instead of leaving a blank, apparently healthy browser desktop.
+
+```bash
+docker compose logs --tail=100
+docker compose exec phonodex /usr/bin/python3 /opt/phonodex/docker/healthcheck.py
+docker compose down
+```
+
+To update, fetch the desired source version and run `docker compose up --build -d`
+again. Back up the persistent folders before updates; do not delete the volumes.
+
 ## Configuration
 
-When running the packaged app, Phonodex stores its settings in `%LOCALAPPDATA%\Phonodex\`:
+On Windows, the packaged app stores settings in `%LOCALAPPDATA%\Phonodex\`;
+running from source preserves the existing project-directory behavior.
+On Linux, settings live in `$XDG_CONFIG_HOME/Phonodex` or
+`~/.config/Phonodex` when `XDG_CONFIG_HOME` is unset.
+Set **`PHONODEX_CONFIG_DIR`** to an absolute writable directory to override either
+platform (Docker uses `/config`).
 
 - `api_key.txt` - your saved Discogs API token
 - `folder_format_settings.json` - your custom export folder structure
 - `genres.txt` - your editable genre dictionary (one genre per line; lines starting with `#` are comments)
 
-When running from source, these files live in the project root. The default export structure format (that I use) is:
+This directory also holds the selected skin, saved alongside the export format.
+New profiles receive a copy of the bundled genre dictionary; existing dictionaries
+are never overwritten. Treat the directory as private: `api_key.txt` contains your
+Discogs token in plain text. Do not commit it or bake it into an image.
+
+The default Windows export structure is:
 
 ```
 D:\Music\Collection\%genre%\%year%\[%catalognumber%] %albumartist% - %album%\%artist% - %title%
 ```
+
+Linux uses the same structure under `~/Music/Collection`. Set
+**`PHONODEX_LIBRARY_DIR`** to an absolute path to change the default root (Docker
+uses `/music`). A saved folder format takes precedence over this default.
+Use Linux paths in the container, not Windows drive letters.
 
 ![image](assets/folder_structure.png)
 
@@ -142,6 +281,11 @@ You can customize this format using the following placeholders:
 5b. Edit metadata directly by double-clicking the field on the table **(click the Enter key to save)**, or for selected files on the left pane **(click SAVE METADATA)**
 6. Use "EXPORT" to organize files into your collection
 
+**Work on backups or copies first.** Tagging writes to the selected files.
+**EXPORT moves files**, rather than creating an additional copy, and the existing
+export behavior can overwrite matching destinations after confirmation. Do not
+tag or move files that another application is still downloading.
+
 ### Tips
 
 - Use the filter box above the table to quickly narrow down files, and click any column header to sort by it.
@@ -154,6 +298,35 @@ You can customize this format using the following placeholders:
 
 Contributions are welcome!
 Please feel free to submit a Pull Request.
+
+### Offline regression checks
+
+No API token, music downloads, or third-party test runner are needed:
+
+```bash
+python -m unittest discover -s tests -v
+python -m unittest discover -s docker -p test_support.py -v
+python tests/smoke_gui.py
+```
+
+The GUI smoke test creates a temporary synthetic MP3, opens the actual UI,
+changes tags and artwork, saves preferences, exports the file, and checks that
+the synthetic audio frames are unchanged. It does not use your music or make
+metadata API requests. A display is required; headless Linux can use
+`xvfb-run -a python tests/smoke_gui.py` after installing `xvfb` and `xauth`.
+
+For Docker integration coverage, first build the image and then run:
+
+```bash
+docker compose build
+python docker/smoke.py --image phonodex:local
+```
+
+This creates and removes its own disposable containers and a config volume. It
+checks HTTP/WebSocket/VNC, the actual application window, non-root isolation,
+recreation persistence, signal shutdown, and failure handling. It never mounts
+your music. GitHub Actions runs the native tests on Windows/Linux and the Docker
+smoke test on Linux.
 
 ## License
 
