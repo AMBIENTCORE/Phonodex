@@ -4,7 +4,7 @@ Dialog windows for the Phonodex application.
 
 import tkinter as tk
 from tkinter import ttk, StringVar, messagebox
-from config import Config, folder_format, DEFAULT_FOLDER_FORMAT
+from config import Config, folder_format, DEFAULT_FOLDER_FORMAT, save_folder_format
 from ui.styles import style_button, create_styled_entry, style_label
 import os
 
@@ -32,7 +32,7 @@ def show_folder_format_dialog(parent_window, custom_font, on_continue_callback):
             fg=Config.COLORS["TEXT"]).pack(pady=(10, 5), padx=10)
     
     # Add explanation text
-    explanation_text = """
+    explanation_text = f"""
 Available placeholders:
 %genre% - The genre tag
 %year% - The release year
@@ -43,7 +43,7 @@ Available placeholders:
 %title% - The track title
 
 Default format:
-D:\\Music\\Collection\\%genre%\\%year%\\[%catalognumber%] %albumartist% - %album%\\%artist% - %title%
+{DEFAULT_FOLDER_FORMAT}
     """
     
     # Add explanation text widget
@@ -112,6 +112,9 @@ D:\\Music\\Collection\\%genre%\\%year%\\[%catalognumber%] %albumartist% - %album
         # Check if format ends with a directory separator
         if format_string.endswith('\\') or format_string.endswith('/'):
             return False, "Format cannot end with a directory separator (\\, /)"
+
+        if os.name != "nt" and not os.path.isabs(format_string):
+            return False, "Use an absolute Linux path, for example /music/%album%/%title%"
             
         # Check if format includes at least one metadata placeholder
         placeholders = ['%genre%', '%year%', '%catalognumber%', '%albumartist%', '%album%', '%artist%', '%title%']
@@ -166,13 +169,7 @@ D:\\Music\\Collection\\%genre%\\%year%\\[%catalognumber%] %albumartist% - %album
             # Debug message about path
             print(f"Attempting to save to: {settings_path}")
             
-            # Try to directly write to the file instead of using save_settings
-            import json
-            with open(settings_path, 'w') as f:
-                settings = {
-                    'folder_format': folder_format
-                }
-                json.dump(settings, f, indent=4)
+            save_folder_format(folder_format)
             
             # Just verify the file exists without showing a popup
             if not os.path.exists(settings_path):
@@ -234,13 +231,7 @@ D:\\Music\\Collection\\%genre%\\%year%\\[%catalognumber%] %albumartist% - %album
             print(f"Saving format before continuing: {folder_format}")
             print(f"Saving to: {settings_path}")
             
-            # Try to directly write to the file instead of using save_settings
-            import json
-            with open(settings_path, 'w') as f:
-                settings = {
-                    'folder_format': folder_format
-                }
-                json.dump(settings, f, indent=4)
+            save_folder_format(folder_format)
                 
             # Success - set background to green (even though we'll be closing the dialog)
             format_entry.configure(bg=Config.COLORS["VALID_ENTRY"])

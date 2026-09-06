@@ -30,6 +30,9 @@ api_key.txt
 folder_format_settings.json
 *.log
 phonodex_log.txt
+.env
+.env.*
+!.env.example
 
 # Editor / OS
 .vscode/

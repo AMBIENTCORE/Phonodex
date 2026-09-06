@@ -1,0 +1,57 @@
+name: Tests
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  native:
+    name: Native Python and Tk (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2022]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install Linux display dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-tk xvfb xauth xclip fontconfig
+          install -D -m 644 assets/I-pixel-u.ttf "$HOME/.local/share/fonts/I-pixel-u.ttf"
+          fc-cache -f
+      - name: Install Python dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Application unit tests
+        run: python -m unittest discover -s tests -v
+      - name: Container support unit tests
+        run: python -m unittest discover -s docker -p test_support.py -v
+      - name: Offline GUI smoke test (Windows)
+        if: runner.os == 'Windows'
+        run: python tests\smoke_gui.py
+      - name: Offline GUI smoke test (Linux)
+        if: runner.os == 'Linux'
+        run: xvfb-run --auto-servernum --server-args="-screen 0 1920x1080x24" python tests/smoke_gui.py
+
+  container:
+    name: Browser container
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate Compose configuration
+        run: docker compose config --quiet
+      - name: Build the Linux browser image
+        run: docker build --tag phonodex:ci .
+      # Creates only disposable containers/config; never mounts or edits music.
+      - name: Readiness, WebSocket, persistence and failure smoke tests
+        run: python3 docker/smoke.py --image phonodex:ci

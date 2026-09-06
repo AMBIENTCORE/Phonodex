@@ -1,0 +1,21 @@
+# Only application resources and container support belong in the build context.
+**
+!requirements.txt
+!main.py
+!config.py
+!genres.txt
+!LICENSE
+!services/
+!services/**
+!ui/
+!ui/**
+!utils/
+!utils/**
+!assets/
+!assets/**
+!docker/
+!docker/**
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+**/*.log

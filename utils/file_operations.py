@@ -5,7 +5,7 @@ Provides functionality for file handling, selection, path manipulation, and audi
 
 import os
 import sys
-import re
+import tkinter as tk
 from tkinter import filedialog
 from utils.logging import log_message
 
@@ -154,53 +154,23 @@ def handle_drop(files, file_list_var=None, processed_files=None, updated_files=N
     # Log the raw data for debugging
     log_message(f"[DEBUG] Raw dropped data: {files}")
     
-    # New approach: extract ALL possible paths regardless of format
     dropped_paths = []
     
     if files:
-        # Extract paths using different methods and combine results
-        
-        # 1. First look for quoted paths (for folders with spaces)
-        quoted_paths = []
-        if '"' in files:
-            quoted_matches = re.findall(r'"([^"]+)"', files)
-            for path in quoted_matches:
-                if os.path.exists(path):
-                    quoted_paths.append(path)
-                    log_message(f"[DEBUG] Found quoted path: '{path}'")
-        
-        # 2. Look for paths between braces
-        brace_paths = []
-        if '{' in files and '}' in files:
-            brace_matches = re.findall(r'\{([^}]+)\}', files)
-            for path in brace_matches:
-                if os.path.exists(path):
-                    brace_paths.append(path)
-                    log_message(f"[DEBUG] Found brace path: '{path}'")
-        
-        # 3. Look for basic Windows drive paths (for folders without spaces)
-        # This captures paths that start with drive letter and colon, and doesn't have a space until the next quote
-        drive_paths = []
-        basic_path_matches = re.findall(r'([A-Za-z]:[/\\][^ "\r\n{}\[\]]*)', files)
-        for path in basic_path_matches:
-            if os.path.exists(path):
-                drive_paths.append(path)
-                log_message(f"[DEBUG] Found basic drive path: '{path}'")
-        
-        # 4. Look for paths in newline-separated format
-        newline_paths = []
-        if '\n' in files or '\r\n' in files:
-            for line in re.split(r'\r?\n', files):
-                clean_line = line.strip().strip('"')
-                if clean_line and os.path.exists(clean_line):
-                    newline_paths.append(clean_line)
-                    log_message(f"[DEBUG] Found newline path: '{clean_line}'")
-        
-        # Combine all paths but remove duplicates while preserving order
+        # TkDND supplies a Tcl list on both Windows and X11, not shell quoting.
+        try:
+            interpreter = table.tk if table is not None else tk.Tcl()
+            candidates = interpreter.splitlist(files)
+        except tk.TclError as error:
+            log_message(f"[ERROR] Invalid dropped file list: {error}")
+            return []
         all_paths = []
         seen = set()
         
-        for path in quoted_paths + brace_paths + drive_paths + newline_paths:
+        for path in candidates:
+            if not os.path.exists(path):
+                log_message(f"[WARNING] Dropped path does not exist: {path}")
+                continue
             norm_path = os.path.normpath(path)
             if norm_path not in seen:
                 seen.add(norm_path)
